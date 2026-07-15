@@ -1,4 +1,4 @@
-﻿/**
+/**
  * app/composables/usePuzzleGame.ts
  *
  * Group-aware swap puzzle state. Every piece always occupies exactly one
@@ -145,8 +145,10 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }
     for (let i = 0; i < N; i++) {
       const p = list[i]!
-      p.groupId = rootPieceId[i]!
-      p.groupAligned = alignedMap.get(p.groupId) === true
+      const newGid = rootPieceId[i]!
+      const newAlign = alignedMap.get(newGid) === true
+      if (p.groupId !== newGid) p.groupId = newGid
+      if (p.groupAligned !== newAlign) p.groupAligned = newAlign
     }
   }
 

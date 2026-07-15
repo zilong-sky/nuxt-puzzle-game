@@ -8,7 +8,7 @@
 -->
 <template>
   <div class="puzzle-wrap" ref="wrapRef">
-    <div class="board" ref="boardRef">
+    <div class="board" ref="boardRef" :style="{ '--swap-ms': swapMs + 'ms' }">
       <img class="board-ghost"
         :src="imageUrl"
         alt=""
@@ -31,6 +31,7 @@
         }"
         :style="pieceStyle(p)"
         :data-piece-id="p.id"
+        v-memo="[p.slotIndex, p.groupId, p.groupAligned, props.cols, props.rows, props.imageUrl, selectedGroupId === p.groupId]"
         @pointerdown="onPointerDown($event, p.id)"
       >
         <div class="piece-fill" :style="fillStyle(p)" />
@@ -54,6 +55,8 @@ const emit = defineEmits<{
   moveGroup: [pieceId: number, dCol: number, dRow: number]
   moveGroupToSlot: [pieceId: number, targetSlot: number]
 }>()
+
+const swapMs = computed(() => (props.cols * props.rows >= 80) ? 60 : 120)
 
 const wrapRef = ref<HTMLElement | null>(null)
 const boardRef = ref<HTMLElement | null>(null)
@@ -399,8 +402,8 @@ onBeforeUnmount(() => {
   position: absolute;
   cursor: grab;
   transform-origin: center center;
-  transition: left 0.12s cubic-bezier(0.2, 0, 0, 1),
-              top 0.12s cubic-bezier(0.2, 0, 0, 1);
+  transition: left var(--swap-ms, 120ms) cubic-bezier(0.2, 0, 0, 1),
+              top var(--swap-ms, 120ms) cubic-bezier(0.2, 0, 0, 1);
   will-change: transform, left, top;
 }
 .piece.dragging {

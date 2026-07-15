@@ -1,97 +1,89 @@
-# 两处调整
+# 松手交换卡顿优化（大棋盘专用）
 
-## 一、休闲模式难度上限改成 50
+## 根因分析
+用户报告：`.piece` 数量多时（如 50/100/200 块），松手瞬间交换有卡顿感。
 
-改 `app/pages/play/casual.vue`：
+排查链路（`onPointerUp` → `emit('moveGroup')` → `usePuzzleGame.moveGroup`）：
+1. `moveGroup` 里 `for (const s of shifts) s.piece.slotIndex = s.newSlot` + `for (displaced) displaced[k].slotIndex = freeSlots[k]` —— **深响应式 mutation**，每次赋值触发一次 track 通知；虽然 Vue 会去重合并成一次 flush，但 200 次 deps 通知本身有几毫秒开销。
+2. Vue re-render `PuzzleBoard`：
+   - `slotMap` computed 重建 O(N)
+   - **所有 N 个 `<div class="piece">` 都被 patch**，每个都跑一遍 `pieceStyle(p)`（读 slotIndex/cols/rows）+ `fillStyle(p)`（读 slotMap → neighborInsets → 4 次 map 查找 + box-shadow 字符串拼接 + border color 计算）。虽然实际 DOM diff 只更新几块，但函数调用和响应式追踪开销 × N 就明显了。
+3. CSS `transition: left 0.12s cubic-bezier(...)` —— 每个被换位置的块启动合成层动画。这个是必要的（要看到滑动效果），但配合前面 2 就叠加。
+
+## 修复方案
+
+### 优化 1：`.piece` 上加 `v-memo`（首要且最有效）
+
+只有 slotIndex/groupId/groupAligned/cols/rows/imageUrl 真的变了才 patch 这个 piece。其余块**完全跳过 render**。
+
+`app/components/PuzzleBoard.vue` template：
 ```html
-<DifficultyModal
-  :open="!pieceCountChosen"
-  :min="4" :max="50" :initial="25"
-  ...
-/>
+<div
+  v-for="p in pieces"
+  :key="p.id"
+  class="piece"
+  :class="{
+    selected: selectedGroupId === p.groupId,
+    'group-aligned': p.groupAligned
+  }"
+  :data-piece-id="p.id"
+  :style="pieceStyle(p)"
+  v-memo="[p.slotIndex, p.groupId, p.groupAligned, props.cols, props.rows, props.imageUrl, selectedGroupId === p.groupId]"
+  @pointerdown="onPointerDown($event, p)"
+>
+  <div class="piece-fill" :style="fillStyle(p)" />
+</div>
 ```
-（把原来的 `:max="200"` 改 `:max="50"`；`:initial="48"` 改成 `:initial="25"`，让默认落在合理位置。）
+（保持现有其他属性；只是新增 `v-memo` 一行。`selectedGroupId === p.groupId` 单独提出来，让点选态变化时也能重绘。）
 
-## 二、整组一起拖动（可视 + 松手交换）
+### 优化 2：大棋盘时缩短 CSS transition
 
-### 现状
-- `recomputeGroups()` 已经把相邻且相对位置正确的块合并成同一个 `groupId`。
-- 内部无缝：`neighborInsets` 已经在组内边把 border-color 置 transparent、去掉 box-shadow —— 这部分**不用改**。
-- `computeGroupMoveInto` 已经把整组当作一个整体做碰撞/交换判定，松手时 `emit('moveGroup')` 也是整组移动。
-- 唯一缺失：**拖动过程中的可视 offset** 只写在 `drag.dragEl`（当前被按的那一块）上，其他组成员不动，视觉上组"散开"。
-
-### 修改（`app/components/PuzzleBoard.vue`）
-
-#### 1. 在 `DragState` 里加成员 DOM 引用
-```ts
-interface DragState {
-  ...
-  members: PieceState[]
-  memberEls: HTMLElement[]       // 新增
-  dragEl: HTMLElement | null
-  ...
-}
-```
-
-#### 2. `onPointerDown` 里收集 memberEls
-
-在计算 `drag = { ... }` 后：
-```ts
-const boardEl = /* 原有 */
-const memberEls: HTMLElement[] = []
-if (boardEl) {
-  for (const m of drag.members) {
-    const el = boardEl.querySelector<HTMLElement>(`[data-piece-id="${m.id}"]`)
-    if (el) memberEls.push(el)
+`.piece` transition 时长基于块数动态调整：
+- 加个 computed：`const swapTransition = computed(() => (cols.value * rows.value >= 80) ? 60 : 120)`
+- 在 `.piece` `:style` 里注入一个 CSS 变量 `--swap-ms`：
+  ```ts
+  function pieceStyle(p) {
+    return {
+      ...
+      '--swap-ms': swapTransition.value + 'ms',
+    }
   }
-}
-drag.memberEls = memberEls
-```
-（如果 piece 元素上没有 `data-piece-id`，那就在模板里给 `.piece` 加 `:data-piece-id="p.id"`。）
+  ```
+  但 `--swap-ms` 应该在 `.board` 上设一次而不是每块设一次。改成 `:style` 挂 `.board`：
+  ```html
+  <div class="board" ref="boardEl" :style="{ '--swap-ms': swapMs + 'ms' }">
+  ```
+  ```ts
+  const swapMs = computed(() => (props.cols * props.rows >= 80) ? 60 : 120)
+  ```
+- CSS：
+  ```css
+  .piece {
+    transition: left var(--swap-ms, 120ms) cubic-bezier(0.2, 0, 0, 1),
+                top  var(--swap-ms, 120ms) cubic-bezier(0.2, 0, 0, 1);
+  }
+  ```
+  （替换现有 `.piece` 的 transition 硬编码时间。）
 
-**给每个成员元素加 `dragging` class** 而不是只加在 dragEl：
-```ts
-for (const el of memberEls) el.classList.add('dragging')
-```
-（也保留原来在 dragEl 上加 dragging 的语义。用循环覆盖即可，不要重复加。）
+### 优化 3：`recomputeGroups` 内部小优化
 
-#### 3. `onPointerMove` 同步给所有成员写 CSS 变量
+现在每次 `moveGroup` 尾巴都跑一次 `recomputeGroups`，全表 O(N) 是必要的。里面用了 `slotToIdx.get` 已经是 O(1)。**唯一浪费**：
+- 最后循环里 `p.groupId = rootPieceId[i]` 和 `p.groupAligned = ...` 无条件写深属性 → N 次 track。改成"值变了才写"：
+  ```ts
+  for (let i = 0; i < N; i++) {
+    const p = list[i]!
+    const newGid = rootPieceId[i]!
+    const newAlign = alignedMap.get(newGid) === true
+    if (p.groupId !== newGid) p.groupId = newGid
+    if (p.groupAligned !== newAlign) p.groupAligned = newAlign
+  }
+  ```
 
-替换现有的：
-```ts
-pieceEl.style.setProperty('--drag-dx', dx + 'px')
-pieceEl.style.setProperty('--drag-dy', dy + 'px')
-```
-为：
-```ts
-for (const el of drag.memberEls) {
-  el.style.setProperty('--drag-dx', dx + 'px')
-  el.style.setProperty('--drag-dy', dy + 'px')
-}
-```
-
-#### 4. `onPointerUp` 归位
-
-原来只清 dragEl，改成遍历 memberEls：
-```ts
-for (const el of drag.memberEls) {
-  el.classList.remove('dragging')
-  el.style.setProperty('--drag-dx', '0px')
-  el.style.setProperty('--drag-dy', '0px')
-}
-```
-保留原有的 clearHoverTargets / boardEl 去 is-dragging / 摘监听 / drag=null / emit 顺序。
-
-#### 5. z-index 保证整组浮起
-
-`.piece.dragging` 已有 `z-index` / `transform: translate3d(...) scale(1.05)`。为了整组一起浮起来但不互相遮，保持 scale(1.05) 只用一次没问题（每块单独 scale，视觉上组整体略放大也合理）。若组太大导致边缘视觉出格，可以把 scale 改成 1.02 —— **本次先不改 scale**，观察后再定。
-
-#### 6. 小心 `.piece` 上的 CSS transition
-`.piece { transition: left/top 0.12s ...; }` 里没有 transform，OK。`--drag-dx/dy` 变化不会有 transition。松手归零瞬间跳回也不会飘。
+### 优化 4：`checkFinished` 用短路遍历（已经是 `.every`，OK，不改）
 
 ## 交付
 
 1. `npm run build` 通过。
-2. `git add -A && git commit -m "feat(casual): max 50; feat(drag): whole group follows finger"`。
+2. `git add -A && git commit -m "perf(swap): v-memo + dynamic transition + skip no-op writes"`。
 3. `git push origin master`（失败重试一次）。
 4. 全程自主完成，不要询问。
