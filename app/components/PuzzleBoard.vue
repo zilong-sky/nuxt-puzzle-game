@@ -1,4 +1,4 @@
-<!--
+﻿<!--
   app/components/PuzzleBoard.vue
   Group-aware swap board. Pieces are grouped when they are neighbors in
   both the current slot layout and the correct layout. A drag or a
@@ -301,18 +301,25 @@ function onPointerUp(e: PointerEvent) {
   const cellH = drag.boardRect.height / props.rows
   const dCol = Math.round(drag.curDx / cellW)
   const dRow = Math.round(drag.curDy / cellH)
+  // 1) Reset visuals synchronously via direct DOM ops BEFORE any emit.
+  //    Kills perceived latency between finger-up and the piece snapping
+  //    into its new slot: the translate3d offset is cleared and the
+  //    transition-suppressing `dragging` class is removed in the same
+  //    frame, so by the time Vue flushes the state change there is no
+  //    leftover visual to catch up on.
+  const dragEl = drag.dragEl
+  const boardEl = getBoardEl()
+  if (dragEl) {
+    dragEl.classList.remove('dragging')
+    dragEl.style.setProperty('--drag-dx', '0px')
+    dragEl.style.setProperty('--drag-dy', '0px')
+  }
+  if (boardEl) boardEl.classList.remove('is-dragging')
+  clearHoverTargets()
+
   window.removeEventListener('pointermove', onPointerMove)
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerUp)
-  const pieceElUp = drag.dragEl
-  if (pieceElUp) {
-    pieceElUp.style.setProperty('--drag-dx', '0px')
-    pieceElUp.style.setProperty('--drag-dy', '0px')
-    pieceElUp.classList.remove('dragging')
-  }
-  const boardEl = getBoardEl()
-  if (boardEl) boardEl.classList.remove('is-dragging')
-  clearHoverTargets()
   drag = null
 
   if (wasDrag) {
@@ -385,7 +392,8 @@ onBeforeUnmount(() => {
   position: absolute;
   cursor: grab;
   transform-origin: center center;
-  transition: left 0.15s ease, top 0.15s ease;
+  transition: left 0.12s cubic-bezier(0.2, 0, 0, 1),
+              top 0.12s cubic-bezier(0.2, 0, 0, 1);
   will-change: transform, left, top;
 }
 .piece.dragging {

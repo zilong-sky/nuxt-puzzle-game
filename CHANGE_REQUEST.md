@@ -1,111 +1,145 @@
-# 拖动跟手度进阶优化
+# 两处修复
 
-## 现象
-上一次优化已经消除了大部分卡顿（DOM 直写 + hover 节流 + members 缓存），但拖动仍有轻微不跟手感。
+## 一、松手后交换卡顿
 
-## 剩余瓶颈分析
+### 现象
+拖动跟手很顺。但**松手瞬间**要等一小会儿才看到目标块交换过来，明显有延迟感。
 
-### 瓶颈 1（最大）：`.piece.dragging` 用了 `filter: drop-shadow(...)`
-`filter: drop-shadow` 在移动端 GPU 上每帧都要重光栅化，是**跟手感的头号杀手**。哪怕 CSS var 直写、transform 硬件加速全部到位，drop-shadow 一开，还是感觉黏。
+### 根因
+`onPointerUp` 里同步执行的链路是：
+1. `emit('moveGroup', ...)` → 父组件 `usePuzzleGame.moveGroup` → `recomputeGroups()`（遍历所有 piece）+ `checkFinished()`（再遍历一遍）
+2. 之后 Vue 触发所有 `.piece` 的 `pieceStyle` 重算（left/top 变了，slotIndex 变了，groupId 可能变了，groupAligned 可能变了）
+3. `.piece` 上的 `transition: left 0.15s, top 0.15s` 走 150ms 过渡动画
 
-### 瓶颈 2：rAF 强制推迟一帧
-现在 pointermove → 只做数据存储 → rAF 里才 setProperty。这在 60/90/120Hz 屏上都会额外拖 8~16ms。移动端 pointer event 本身已经和 vsync 对齐，rAF 反而多加一层延迟。
+在 9×9 = 81 个 piece 时，第 1、2 步的响应式 diff + 样式重算耗时明显，用户先看到"松手 → 卡一下 → 才开始飞过去"。
 
-### 瓶颈 3：CSS 变量写在 `.board` 上
-`.board { --drag-dx: 0 }` 每次改都会让浏览器对整个 board 子树做一次样式失效检查（虽然只有 `.piece.dragging` 使用，检查仍要走）。把变量直接写到**被拖的那个 piece 元素上**能把样式失效范围缩到最小。
+另外 `dragEl.classList.remove('dragging')` 在 `emit` 之后执行，`dragging` 状态下 transition 被冻结；等 emit 触发响应式重算 + Vue 下一次 flush 之后才移除 class，这段时间 piece 已经"逻辑上"到了新位置但**视觉上**还在旧的 `translate3d` 上 —— 移除 class 后瞬间才播放 left/top transition，用户感觉的"松手到看到动"就是这段时间差。
 
-### 瓶颈 4：coalesced events 未启用
-手机高刷屏上一帧内可能有多次触摸采样，浏览器默认合并成一个事件。`event.getCoalescedEvents()` 可以取到全部原始点，让插值更贴合手指轨迹（对"末段收尾"跟手感有帮助）。
+### 修改（`app/components/PuzzleBoard.vue`）
 
-### 瓶颈 5：`.piece` 上写了 `transition: left 0.15s, top 0.15s, transform 0.2s`
-拖动结束松手瞬间 slotIndex 变了，`left/top` 走 0.15s transition —— 这段时间视觉上"回收慢"，容易被误解为拖动本身黏。可以保留（这个是"落位"动画，玩家喜欢），但**要确保 transform 上没有过渡**（现在写了 `transform 0.2s`，如果 dragging class 被移除的一瞬间 transform 还没归零就会走 0.2s 过渡回到原位，感觉飘）。
+1. **松手时先立即清视觉状态，再 emit**（顺序反过来）：
+   ```ts
+   function onPointerUp(e: PointerEvent) {
+     if (!drag || e.pointerId !== drag.pointerId) return
+     const wasDrag = drag.moved
+     const pid = drag.pieceId
+     const cellW = drag.boardRect.width / props.cols
+     const cellH = drag.boardRect.height / props.rows
+     const dCol = Math.round(drag.curDx / cellW)
+     const dRow = Math.round(drag.curDy / cellH)
 
-## 具体改动（都在 `app/components/PuzzleBoard.vue`）
+     // 1) 先把 dragEl 的 --drag-dx/dy 归零并移除 dragging class
+     //    并且清 hover slot、board.is-dragging —— 这些都是 DOM 直操作，同步立即生效
+     const dragEl = drag.dragEl
+     const boardEl = getBoardEl()
+     if (dragEl) {
+       dragEl.classList.remove('dragging')
+       dragEl.style.setProperty('--drag-dx', '0px')
+       dragEl.style.setProperty('--drag-dy', '0px')
+     }
+     if (boardEl) boardEl.classList.remove('is-dragging')
+     clearHoverTargets()
 
-### 1. 干掉 `filter: drop-shadow`
-```css
-.piece.dragging {
-  cursor: grabbing;
-  transition: none;
-  /* 删掉 filter: drop-shadow(...) */
-  /* 阴影改用 piece-fill 的 box-shadow：拖动组的四条边都亮起来 */
-}
-.piece.dragging .piece-fill {
-  box-shadow:
-    0 0 0 2px rgba(0, 0, 0, 0.15),
-    0 8px 18px rgba(0, 0, 0, 0.35);
-}
-```
-`box-shadow` 走 compositor 层，比 `filter: drop-shadow` 快非常多。
+     window.removeEventListener('pointermove', onPointerMove)
+     window.removeEventListener('pointerup', onPointerUp)
+     window.removeEventListener('pointercancel', onPointerUp)
+     drag = null
 
-### 2. 把 rAF 去掉，pointermove 里直接写 style
-```ts
-function onPointerMove(e: PointerEvent) {
-  if (!drag || e.pointerId !== drag.pointerId) return
-  // 采集 coalesced events 的最后一个作为最新位置
-  const events = (typeof e.getCoalescedEvents === 'function')
-    ? e.getCoalescedEvents()
-    : [e]
-  const last = events[events.length - 1] || e
-  const dx = last.clientX - drag.startX
-  const dy = last.clientY - drag.startY
-  if (!drag.moved && Math.hypot(dx, dy) > CLICK_THRESHOLD) {
-    drag.moved = true
-    draggingGroupId.value = drag.groupId
-    selectedGroupId.value = null
-  }
-  drag.curDx = dx; drag.curDy = dy
-  if (!drag.moved) return
-  // 直接写 CSS 变量到 piece 元素，绕过 rAF
-  const pieceEl = drag.dragEl
-  if (pieceEl) {
-    pieceEl.style.setProperty('--drag-dx', dx + 'px')
-    pieceEl.style.setProperty('--drag-dy', dy + 'px')
-  }
-  // 整数格变化才更新 hoverTargets（保留 lastDCol/lastDRow 节流）
-  const cellW = drag.boardRect.width / props.cols
-  const cellH = drag.boardRect.height / props.rows
-  const dCol = Math.round(dx / cellW)
-  const dRow = Math.round(dy / cellH)
-  if (dCol !== drag.lastDCol || dRow !== drag.lastDRow) {
-    drag.lastDCol = dCol; drag.lastDRow = dRow
-    const { legal, targets } = computeGroupMove(drag.pieceId, dCol, dRow)
-    dragLegal.value = legal && (dCol !== 0 || dRow !== 0)
-    hoverTargets.value = legal ? targets : new Set()
-  }
-}
-```
-`DragState` 里新增 `dragEl: HTMLElement | null`，在 `onPointerDown` 里赋值为 `e.currentTarget as HTMLElement`。取消 `scheduleUpdate/raf/raf id` 相关字段。
+     if (wasDrag) {
+       if (dCol === 0 && dRow === 0) return
+       // 2) 再触发状态变更 —— 此时视觉上 dragEl 已经就绪好过渡
+       emit('moveGroup', pid, dCol, dRow)
+       return
+     }
+     // ... 点击分支保持不变
+   }
+   ```
 
-### 3. CSS 变量写到 piece 元素，而不是 board
-- 删掉 `.board { --drag-dx: 0; --drag-dy: 0 }`。
-- `.piece.dragging` 消费当前元素自己的 `--drag-dx / --drag-dy`：
-  ```css
-  .piece.dragging {
-    transform: translate3d(var(--drag-dx, 0), var(--drag-dy, 0), 0) scale(1.05);
-    z-index: 999;
-    will-change: transform;
-  }
+2. **`.piece` 的 left/top transition 缩短并换更快曲线**：
+   ```css
+   .piece {
+     transition: left 0.12s cubic-bezier(0.2, 0, 0, 1),
+                 top  0.12s cubic-bezier(0.2, 0, 0, 1);
+   }
+   ```
+   150ms → 120ms，曲线换成 fast-out（起手快，末尾平滑）。
+
+3. **`recomputeGroups` 内部微优化**（`app/composables/usePuzzleGame.ts`）：
+   - 当前实现每次 move 后遍历所有 piece 构建 `slotToIdx` map + union-find。9×9 = 81 元素，操作量 O(N)，本身不慢。**真正慢的是响应式 trigger**：`recomputeGroups` 里对每个 piece 都写 `p.groupId = ...; p.groupAligned = ...`，触发 81 * 2 次响应式依赖 flush。
+   - 改用批量：把 `pieces.value` 整个替换成新数组，而不是逐字段写 —— Vue 3 shallowRef 或 markRaw 优化空间大。但改动风险偏大，**先做低风险优化**：
+     ```ts
+     // 在 recomputeGroups 内一次性写入，包装 nextTick 之前先算完
+     // 具体：先把 nextGroupId/nextAligned 存到局部 array，遍历结束一次性赋值
+     ```
+     其实这个和逐条写效果差不多。**真要提速**：把 `PieceState.groupId/groupAligned` 从 ref 元素的属性改成用两张外部 Map（groupIdMap / groupAlignedMap，Vue 响应式），模板里通过 `groupIdMap.get(p.id)` 读。这样只有 Map 变更一次触发一次依赖 flush。
+   - **实际改法（更简单更有效）**：在 `usePuzzleGame.ts` 里把 `pieces` 从 `ref` 改成 `shallowRef`，`moveGroup` 结束时手动 `triggerRef(pieces)` 一次。这样 81 次字段写入不会各自触发响应式，只在最后统一 flush。
+     ```ts
+     import { shallowRef, triggerRef } from 'vue'
+     const pieces = shallowRef<PieceState[]>([])
+     // ... moveGroup 结束前：
+     recomputeGroups()
+     triggerRef(pieces)
+     checkFinished()
+     ```
+     `PuzzleBoard.vue` 里 `v-for="p in pieces"` 依然正常工作（shallowRef 支持模板解包）。**注意**：`pieceStyle(p)` 里读 `p.slotIndex` 等仍然生效，因为整个数组引用变了（触发 refresh），子字段读取不会漏。
+     ⚠️ 检查是否有别处依赖 `pieces.value[i].xxx` 的深响应式（例如 timer 里改 pieces？看代码没有，安全）。
+
+## 二、圆环开口方向：改成开口在上、弧在下
+
+### 现状
+`DifficultyDial.vue` 用的是 `startAngle=-135°, endAngle=135°`（12点为 0°，顺时针为正）—— 弧从左下顺时针经过 12点 到右下，**缺口在底部**。用户想反过来：**缺口在正上方（12点方向），弧在底部**。
+
+### 修改（`app/components/DifficultyDial.vue`）
+- 有效弧参数换成：
+  ```ts
+  const START_ANGLE = 135   // 12点为 0°，顺时针为正 → 135° 是右下（约 4:30 位置）
+  //                       等一下，让我确认方向：目标是缺口在正上方，
+  //                       弧经过底部。缺口 90° = -45°..+45°，
+  //                       所以有效弧 startAngle = 45°（12点顺时针 45°，约 1:30），
+  //                       扫过 270° 顺时针经 3点、6点、9点，到 -45°（约 10:30）。
+  const START_ANGLE = 45          // min 一端在右上（1:30）
+  const SWEEP = 270               // 顺时针 270° 到 -45°（10:30）
   ```
-- `onPointerUp` 时把该 piece 元素的两个变量置为 `0px`。
-
-### 4. transition 收尾
-- `.piece` 的 transition 保留 `left 0.15s, top 0.15s`（落位动画），**去掉 transform 那段**：
-  ```css
-  .piece { transition: left 0.15s ease, top 0.15s ease; }
+  等等，用户说"**从下面**"——最直觉的理解应该是 **min 在正下方（6点）**，从底部两侧对称向上延伸？那对称的话最舒服：
   ```
-  这样松手瞬间 transform 立即归零，不会飘。
+  START_ANGLE = -135       // 左下 7:30 位置（12点为 0，逆时针为负）
+  SWEEP = 270 顺时针        // 经过 6点(180°) → 3点 → 到右下  ...
+  ```
+  ⚠️ 让我用不同的约定：**数学习惯 3点为 0°，逆时针为正**。这么改容易糊涂。**统一用 SVG 屏幕坐标**：
+  - `angleDeg = 0` = 正右（3点）
+  - 顺时针增加
+  - 12点 = 270°（或 -90°）
+  - 6点 = 90°
+  - 目标：弧从左下经底到右下，缺口在顶部
+  - **startAngle = 135°（左下 7:30）**
+  - **endAngle = 45°（右下 4:30）**
+  - **顺时针扫过：135° → 180°(6点) → 225° → 270°(12点)？不对，顺时针 135→180→225→270→315→360/0→45，共 270°。** 但这条路经过 12点，不是我们要的。
+  - **改逆时针**：从 135° 逆时针到 45°，经过 180°(6点) → 225° → 270°... 也不对，逆时针是 135 → 90 → 45（只 90°）。
+  - **正确**：想让弧覆盖底部半圈+两侧，缺口 90° 在顶部（正上方 ±45°）：
+    - 缺口范围：45°..135°（SVG 坐标，即 12点两侧 45°）… 不对，SVG 坐标里 270° 才是 12点。让我重新校准。
+    - SVG y 轴向下，屏幕 3点方向是 x+, 屏幕 6点方向是 y+, atan2(y, x)：3点=0°, 6点=90°, 9点=180°, 12点=270° 或 -90°。
+    - 缺口在 12点即 270° ±45° → 缺口范围 225°..315°
+    - 有效弧：315° 顺时针 270° 到 225°，经过 0°(3点) → 90°(6点) → 180°(9点) → 225°(9点稍下)
+    - **startAngle = 315°（右上偏顶）**
+    - **endAngle = 225°（左上偏顶）**
+    - **顺时针 270°**
 
-### 5. pointer 捕获挪到 pointerdown 后立即执行的 board 元素
-现在是 `(e.currentTarget as Element).setPointerCapture?.(e.pointerId)`，`currentTarget` 是那个 piece。保持不变即可，但**加 `passive: false`** 已经通过 `e.preventDefault()` 满足。可选：把 `pointermove` 监听从 `window` 改到该 piece 元素上（因为已经 setPointerCapture，事件会锁定到该元素）。这样监听器搜索作用域更小。
-
-### 6. 检查 `.piece-fill` 的 box-shadow 合成
-上一次为了"无缝大块"用了动态 `box-shadow` 四边合成 + border 分边设色。拖动的 piece 上，如果它也是 groupAligned 组的一部分，会同时叠加 groupAligned 的四边发光和 dragging 的四边阴影 —— 可能过度复杂。可以在 `.piece.dragging .piece-fill` 里用 `box-shadow: 0 8px 18px rgba(0,0,0,0.35) !important` 覆盖，减少每帧合成层。
-
-### 7. touch-action 已经是 none，pointercancel 已监听，保持。
+  - 具体实现里角度用 SVG 坐标（3点=0，顺时针+）：
+    ```ts
+    const START_ANGLE = 315   // 缺口右边界（右上 45° 位置）
+    const END_ANGLE = 225 + 360  // 585，为了让 sweep 顺时针为正差值 = 270
+    const SWEEP = 270
+    // 值 v 映射到角度：t = (v - min) / (max - min)
+    // angle = START_ANGLE + t * SWEEP
+    // 得到的 angle 可能 > 360，画 arc 时对 360 取模
+    ```
+- 弧线路径 `<path d="...">` 和把手位置 `cos/sin` 计算全部按新 START/SWEEP 重推。
+- 死区吸附：pointer 落在缺口范围（angle in (225°, 315°) 缺口方向）时，就近吸到 START_ANGLE 或 END_ANGLE。
+- 中心数字位置从"上""下"改一下：既然缺口朝上，中心数字下方留白多了些，可以把 label 放到数字下面（保持不变）；缺口顶部可以显示 "块数" 小字标签，或者留空即可。**保持中心显示不变**，只改弧方向即可。
 
 ## 交付
+
 1. `npm run build` 通过。
-2. `git add -A && git commit -m "perf(drag): drop filter, sync write, coalesced events"`。
+2. `git add -A && git commit -m "perf(drag): pre-emit visual reset; fix(dial): opening on top"`。
 3. `git push origin master`（失败重试一次）。
 4. 全程自主完成，不要询问。

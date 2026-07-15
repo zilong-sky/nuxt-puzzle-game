@@ -1,9 +1,10 @@
-<!--
+﻿<!--
   app/components/DifficultyDial.vue
   A 270° arc SVG dial for selecting a numeric value.
   - v-model compatible (props.modelValue / emit update:modelValue)
   - Pointer and keyboard interaction
-  - Arc spans -135° to +135° (12 o'clock = 0°). Dead zone at the bottom.
+  - Arc spans 45° clockwise through 180° to 315° (12 o'clock = 0°, clockwise positive).
+    Opening/dead zone is at the top (12 o'clock °45°).
 -->
 <template>
   <div
@@ -82,9 +83,12 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ 'update:modelValue': [value: number] }>()
 
-const START_DEG = -135
-const END_DEG = 135
-const SPAN_DEG = END_DEG - START_DEG // 270
+// Opening at 12 o'clock (°45°). Arc starts at 45° (upper-right, ~1:30),
+// sweeps 270° clockwise through 90° (3), 180° (6), 270° (9) and ends
+// at 315° (upper-left, ~10:30). Dead zone is the top gap.
+const START_DEG = 45
+const END_DEG = 315
+const SPAN_DEG = 270
 
 const CENTER = { x: 120, y: 120 }
 const RADIUS = 92
@@ -126,16 +130,19 @@ function pointerToValue(clientX: number, clientY: number): number | null {
   const vy = ((clientY - rect.top) / rect.height) * 240
   const dx = vx - CENTER.x
   const dy = vy - CENTER.y
-  // atan2 where 0 = 12 o'clock, clockwise positive
-  let deg = (Math.atan2(dx, -dy) * 180) / Math.PI // -180..180
-  // Clamp into arc range [START_DEG, END_DEG]
-  if (deg < START_DEG || deg > END_DEG) {
-    // dead zone: pick nearest endpoint (shortest angular distance)
-    const dStart = angularDist(deg, START_DEG)
-    const dEnd = angularDist(deg, END_DEG)
-    deg = dStart < dEnd ? START_DEG : END_DEG
+  // atan2 where 0 = 12 o'clock, clockwise positive. Normalize to [0, 360).
+  const rawDeg = (Math.atan2(dx, -dy) * 180) / Math.PI // -180..180
+  const clockDeg = (rawDeg + 360) % 360
+  // Arc covers clockDeg in [45, 315]. The gap is the top (315, 360) ∪ [0, 45).
+  let t: number
+  if (clockDeg >= START_DEG && clockDeg <= END_DEG) {
+    t = (clockDeg - START_DEG) / SPAN_DEG
+  } else {
+    // Dead zone at the top: snap to whichever endpoint is closer.
+    const dStart = angularDist(clockDeg, START_DEG)
+    const dEnd = angularDist(clockDeg, END_DEG)
+    t = dStart < dEnd ? 0 : 1
   }
-  const t = (deg - START_DEG) / SPAN_DEG
   const raw = props.min + t * (props.max - props.min)
   const stepped = Math.round(raw / props.step) * props.step
   return clamp(stepped, props.min, props.max)
