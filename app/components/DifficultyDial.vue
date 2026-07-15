@@ -56,14 +56,14 @@
       <text
         class="value-text"
         x="120"
-        y="118"
+        y="69"
         text-anchor="middle"
         dominant-baseline="middle"
       >{{ modelValue }}</text>
       <text
         class="label-text"
         x="120"
-        y="150"
+        y="99"
         text-anchor="middle"
         dominant-baseline="middle"
       >{{ label || '难度' }}</text>

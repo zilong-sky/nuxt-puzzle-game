@@ -1,20 +1,18 @@
-/**
+﻿/**
  * app/services/imageService.ts
- * 图片相关远程接口占位。
- * 后续对接后端修改此处：将 mock 数据替换为真实 API 请求即可。
- */
+ * 鍥剧墖鐩稿叧杩滅▼鎺ュ彛鍗犱綅銆? * 鍚庣画瀵规帴鍚庣淇敼姝ゅ锛氬皢 mock 鏁版嵁鏇挎崲涓虹湡瀹?API 璇锋眰鍗冲彲銆? */
 
 export interface PuzzleImage {
   id: number
   url: string
   title?: string
-  /** 上传者 - 仅云冒险模式使用 */
+  /** 涓婁紶鑰?- 浠呬簯鍐掗櫓妯″紡浣跨敤 */
   uploader?: string
-  /** 上传时间戳 - 云冒险按此升序播放 */
+  /** 涓婁紶鏃堕棿鎴?- 浜戝啋闄╂寜姝ゅ崌搴忔挱鏀?*/
   uploadedAt?: number
 }
 
-/** 内置 SVG 数据 URI，作为演示图。真实环境应由后端返回 CDN 图片 URL。 */
+/** 鍐呯疆 SVG 鏁版嵁 URI锛屼綔涓烘紨绀哄浘銆傜湡瀹炵幆澧冨簲鐢卞悗绔繑鍥?CDN 鍥剧墖 URL銆?*/
 function demoSvg(hue: number, label: string): string {
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400'>
     <defs>
@@ -32,34 +30,31 @@ function demoSvg(hue: number, label: string): string {
 }
 
 /**
- * 获取休闲模式的图库列表。
- * 后续对接后端修改此处：改为 fetch(`${apiBase}/api/images/casual`)。
- */
+ * 鑾峰彇浼戦棽妯″紡鐨勫浘搴撳垪琛ㄣ€? * 鍚庣画瀵规帴鍚庣淇敼姝ゅ锛氭敼涓?fetch(`${apiBase}/api/images/casual`)銆? */
 export async function fetchCasualImages(): Promise<PuzzleImage[]> {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const list: PuzzleImage[] = Array.from({ length: 12 }, (_, i) => ({
-        id: i + 1,
-        url: demoSvg(i * 30, `休闲 #${i + 1}`),
-        title: `休闲图片 ${i + 1}`
-      }))
-      resolve(list)
-    }, 50)
-  })
+  const seeds = [
+    'aurora','forest','ocean','desert','mountain','sunset','city','river','lake','field',
+    'canyon','meadow','glacier','harbor','vineyard','island','sakura','coast','valley','waterfall',
+    'lagoon','savanna','fjord','plateau','oasis','tundra','marsh','dune','reef','summit'
+  ]
+  const list: PuzzleImage[] = seeds.map((seed, i) => ({
+    id: i + 1,
+    url: `https://picsum.photos/seed/${seed}/800/600`,
+    title: seed
+  }))
+  return list
 }
 
 /**
- * 获取云冒险模式图库（其他玩家自拍上传的公开图片，按上传时间升序）。
- * 后续对接后端修改此处：改为 fetch(`${apiBase}/api/images/cloud`)。
- */
+ * 鑾峰彇浜戝啋闄╂ā寮忓浘搴擄紙鍏朵粬鐜╁鑷媿涓婁紶鐨勫叕寮€鍥剧墖锛屾寜涓婁紶鏃堕棿鍗囧簭锛夈€? * 鍚庣画瀵规帴鍚庣淇敼姝ゅ锛氭敼涓?fetch(`${apiBase}/api/images/cloud`)銆? */
 export async function fetchCloudImages(): Promise<PuzzleImage[]> {
   return new Promise((resolve) => {
     setTimeout(() => {
       const now = Date.now()
       const list: PuzzleImage[] = Array.from({ length: 20 }, (_, i) => ({
         id: 1000 + i,
-        url: demoSvg((i + 3) * 22, `云#${i + 1}`),
-        title: `玩家上传 ${i + 1}`,
+        url: demoSvg((i + 3) * 22, `浜?${i + 1}`),
+        title: `鐜╁涓婁紶 ${i + 1}`,
         uploader: `player_${i + 1}`,
         uploadedAt: now - (20 - i) * 3600_000
       }))
@@ -69,14 +64,11 @@ export async function fetchCloudImages(): Promise<PuzzleImage[]> {
 }
 
 /**
- * 用户自拍/相册图片上传到云图库（占位）。
- * 后续对接后端修改此处：改为 POST FormData 到 `${apiBase}/api/images/upload`。
- */
+ * 鐢ㄦ埛鑷媿/鐩稿唽鍥剧墖涓婁紶鍒颁簯鍥惧簱锛堝崰浣嶏級銆? * 鍚庣画瀵规帴鍚庣淇敼姝ゅ锛氭敼涓?POST FormData 鍒?`${apiBase}/api/images/upload`銆? */
 export async function uploadImage(_file: Blob | File): Promise<{ success: boolean; url?: string }> {
   return new Promise((resolve) => {
     setTimeout(() => {
-      // mock：假装上传成功
-      resolve({ success: true, url: '' })
+      // mock锛氬亣瑁呬笂浼犳垚鍔?      resolve({ success: true, url: '' })
     }, 400)
   })
 }
