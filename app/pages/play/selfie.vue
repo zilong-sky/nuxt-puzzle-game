@@ -2,11 +2,11 @@
 <template>
   <div>
     <div v-if="!gameStarted" class="card setup">
-      <h2>📸 自拍上传模式</h2>
+      <h2>📷 自拍上传模式</h2>
       <p class="sub">支持网页摄像头单张自拍 或 从本地相册选择多张图片。选定后依次开始拼图。</p>
 
       <div class="pickers">
-        <button @click="onCameraClick">📷 网页摄像头拍照</button>
+        <button @click="onCameraClick">📸 网页摄像头拍照</button>
         <label class="file-btn">
           🖼 从相册选择（可多选）
           <input type="file" accept="image/*" multiple hidden @change="onFileSelect" />
@@ -21,21 +21,16 @@
       </div>
 
       <div class="difficulty">
-        <label>切块难度：<strong>{{ pieceCount }}</strong> 块</label>
-        <input
-          type="range"
-          min="30"
-          max="200"
-          v-model.number="pieceCount"
-        />
+        <DifficultyDial v-model="pieceCount" :min="4" :max="200" label="切块数" />
         <div class="range-hint">
-          <span>30</span><span>200</span>
+          <span>4 (简单)</span>
+          <span>200 (地狱)</span>
         </div>
+        <button class="ghost-btn" @click="randomize">🎲 随机难度</button>
       </div>
 
       <div class="actions">
         <button :disabled="!images.length" @click="startGame">开始拼图（{{ images.length }} 张）</button>
-        <button class="ghost-btn" @click="randomize">🎲 随机难度</button>
       </div>
     </div>
 
@@ -43,7 +38,7 @@
       <PuzzleGame
         :image-url="current"
         :piece-count="pieceCount"
-        mode-label="📸 自拍上传"
+        mode-label="📷 自拍上传"
         :show-score="false"
         :next-label="hasNext ? '下一张' : '完成'"
         @success="onSuccess"
@@ -54,7 +49,7 @@
     </div>
 
     <!-- 摄像头弹窗 -->
-    <ModalDialog :visible="cameraOn" title="📷 摄像头拍照" closable @close="closeCamera">
+    <ModalDialog :visible="cameraOn" title="📸 摄像头拍照" closable @close="closeCamera">
       <div class="cam-wrap">
         <video ref="videoEl" autoplay playsinline muted></video>
         <canvas ref="canvasEl" hidden></canvas>
@@ -80,6 +75,7 @@
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import PuzzleGame from '~/components/PuzzleGame.vue'
 import ModalDialog from '~/components/ModalDialog.vue'
+import DifficultyDial from '~/components/DifficultyDial.vue'
 import { uploadImage } from '~/services/imageService'
 import { randInt } from '~/utils/random'
 
@@ -149,7 +145,7 @@ function capture() {
 }
 
 function randomize() {
-  pieceCount.value = randInt(30, 200)
+  pieceCount.value = randInt(4, 200)
 }
 
 function startGame() {
@@ -168,7 +164,6 @@ function onNext() {
     idx.value += 1
     pieceCount.value = randInt(30, 80)
   } else {
-    // 全部完成，回到设置页
     gameStarted.value = false
     images.value = []
     idx.value = 0
@@ -181,7 +176,6 @@ function skipUpload() {
 }
 
 async function doUpload() {
-  // 后续对接后端修改此处：将 dataURL 转 Blob 上传到 `${apiBase}/api/images/upload`
   const blob = await (await fetch(current.value)).blob()
   await uploadImage(blob)
   askUpload.value = false
@@ -214,9 +208,8 @@ onBeforeUnmount(closeCamera)
   border-radius: 50%; background: var(--color-danger);
   font-size: 14px; line-height: 1;
 }
-.difficulty { display: flex; flex-direction: column; gap: 4px; }
-.difficulty input[type='range'] { width: 100%; }
-.range-hint { display: flex; justify-content: space-between; font-size: 12px; color: var(--color-text-soft); }
+.difficulty { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.range-hint { display: flex; justify-content: space-between; width: 240px; max-width: 100%; font-size: 12px; color: var(--color-text-soft); }
 .actions { display: flex; gap: 10px; }
 .ghost-btn { background: transparent; color: var(--color-text); border: 1px solid var(--color-border); }
 .cam-wrap video { width: 100%; border-radius: 6px; background: #000; }

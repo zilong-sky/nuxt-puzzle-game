@@ -1,4 +1,4 @@
-﻿<!--
+<!--
   app/components/PuzzleBoard.vue
   Group-aware swap board. Pieces are grouped when they are neighbors in
   both the current slot layout and the correct layout. A drag or a
@@ -8,10 +8,7 @@
 -->
 <template>
   <div class="puzzle-wrap" ref="wrapRef">
-    <div
-      class="board"
-      :class="{ 'is-dragging': draggingGroupId !== null }"
-      >
+    <div class="board" ref="boardRef">
       <img class="board-ghost"
         :src="imageUrl"
         alt=""
@@ -21,9 +18,7 @@
         v-for="s in slots"
         :key="`slot-${s.index}`"
         class="slot"
-        :class="{
-          'slot-active': hoverTargets.has(s.index) && draggingGroupId !== null
-        }"
+        :data-slot="s.index"
         :style="slotStyle(s)"
       />
       <div
@@ -31,7 +26,6 @@
         :key="p.id"
         class="piece"
         :class="{
-          dragging: draggingGroupId === p.groupId,
           selected: selectedGroupId === p.groupId,
           'group-aligned': p.groupAligned
         }"
@@ -61,11 +55,9 @@ const emit = defineEmits<{
 }>()
 
 const wrapRef = ref<HTMLElement | null>(null)
+const boardRef = ref<HTMLElement | null>(null)
 
-const draggingGroupId = ref<number | null>(null)
 const selectedGroupId = ref<number | null>(null)
-const dragLegal = ref(false)
-const hoverTargets = ref<Set<number>>(new Set())
 
 const slots = computed(() => {
   const list: { index: number; row: number; col: number }[] = []
@@ -94,8 +86,6 @@ function slotStyle(s: { row: number; col: number }) {
   }
 }
 
-/** Inset (px) on each side, 1 when there is a gap, 0 when merged with a
- *  same-group neighbor. Total gap between pieces = 2px. */
 function neighborInsets(p: PieceState): { t: number; r: number; b: number; l: number } {
   const col = p.slotIndex % props.cols
   const row = Math.floor(p.slotIndex / props.cols)
@@ -128,8 +118,6 @@ function pieceStyle(p: PieceState): Record<string, string> {
 
 function fillStyle(p: PieceState): Record<string, string> {
   const ins = neighborInsets(p)
-  // The render image already matches the desired orientation, so each
-  // piece simply shows the sub-region at (col, row).
   const bgW = props.cols * 100
   const bgH = props.rows * 100
   const bgX = props.cols > 1 ? (p.col / (props.cols - 1)) * 100 : 0
@@ -151,7 +139,7 @@ function fillStyle(p: PieceState): Record<string, string> {
     right: `${ins.r}px`,
     bottom: `${ins.b}px`,
     left: `${ins.l}px`,
-    backgroundImage: `url(${props.imageUrl})`,
+    backgroundImage: `url("${props.imageUrl}")`,
     backgroundSize: `${bgW}% ${bgH}%`,
     backgroundPosition: `${bgX}% ${bgY}%`,
     boxShadow,
@@ -177,37 +165,62 @@ interface DragState {
   lastDCol: number
   lastDRow: number
   dragEl: HTMLElement | null
+  activeSlotEls: Set<HTMLElement>
+  scratchTargets: Set<number>
 }
 let drag: DragState | null = null
 const CLICK_THRESHOLD = 6
 
 function getBoardEl(): HTMLElement | null {
-  return wrapRef.value?.querySelector('.board') as HTMLElement | null
+  return boardRef.value
 }
 
 function pieceById(id: number): PieceState | undefined {
   return props.pieces.find((p) => p.id === id)
 }
 
-function computeGroupMove(pieceId: number, dCol: number, dRow: number) {
-  let members: PieceState[] | null = null
-  if (drag && drag.pieceId === pieceId) {
-    members = drag.members
-  } else {
-    const anchor = pieceById(pieceId)
-    if (!anchor) return { legal: false, targets: new Set<number>() }
-    members = props.pieces.filter((p) => p.groupId === anchor.groupId)
-  }
-  const targets = new Set<number>()
+function computeGroupMoveInto(state: DragState, dCol: number, dRow: number): boolean {
+  const members = state.members
+  const out = state.scratchTargets
+  out.clear()
   for (const m of members) {
     const c = (m.slotIndex % props.cols) + dCol
     const r = Math.floor(m.slotIndex / props.cols) + dRow
     if (c < 0 || c >= props.cols || r < 0 || r >= props.rows) {
-      return { legal: false, targets: new Set<number>() }
+      out.clear()
+      return false
     }
-    targets.add(r * props.cols + c)
+    out.add(r * props.cols + c)
   }
-  return { legal: true, targets }
+  return true
+}
+
+function applyHoverTargets(next: Set<number>) {
+  if (!drag) return
+  const boardEl = getBoardEl()
+  if (!boardEl) return
+  for (const el of Array.from(drag.activeSlotEls)) {
+    const idx = Number(el.dataset.slot)
+    if (!next.has(idx)) {
+      el.classList.remove('slot-active')
+      drag.activeSlotEls.delete(el)
+    }
+  }
+  next.forEach((idx) => {
+    const el = boardEl.querySelector(`.slot[data-slot="${idx}"]`) as HTMLElement | null
+    if (el && !drag!.activeSlotEls.has(el)) {
+      el.classList.add('slot-active')
+      drag!.activeSlotEls.add(el)
+    }
+  })
+}
+
+function clearHoverTargets() {
+  if (!drag) return
+  for (const el of drag.activeSlotEls) {
+    el.classList.remove('slot-active')
+  }
+  drag.activeSlotEls.clear()
 }
 
 function onPointerDown(e: PointerEvent, id: number) {
@@ -229,7 +242,9 @@ function onPointerDown(e: PointerEvent, id: number) {
     members: props.pieces.filter((pp) => pp.groupId === piece.groupId),
     lastDCol: -9999,
     lastDRow: -9999,
-    dragEl: e.currentTarget as HTMLElement
+    dragEl: e.currentTarget as HTMLElement,
+    activeSlotEls: new Set<HTMLElement>(),
+    scratchTargets: new Set<number>()
   }
   ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   window.addEventListener('pointermove', onPointerMove)
@@ -249,8 +264,10 @@ function onPointerMove(e: PointerEvent) {
   const dy = last.clientY - drag.startY
   if (!drag.moved && Math.hypot(dx, dy) > CLICK_THRESHOLD) {
     drag.moved = true
-    draggingGroupId.value = drag.groupId
     selectedGroupId.value = null
+    const boardEl = getBoardEl()
+    if (boardEl) boardEl.classList.add('is-dragging')
+    if (drag.dragEl) drag.dragEl.classList.add('dragging')
   }
   drag.curDx = dx
   drag.curDy = dy
@@ -267,9 +284,12 @@ function onPointerMove(e: PointerEvent) {
   if (dCol !== drag.lastDCol || dRow !== drag.lastDRow) {
     drag.lastDCol = dCol
     drag.lastDRow = dRow
-    const { legal, targets } = computeGroupMove(drag.pieceId, dCol, dRow)
-    dragLegal.value = legal && (dCol !== 0 || dRow !== 0)
-    hoverTargets.value = legal ? targets : new Set()
+    const legal = computeGroupMoveInto(drag, dCol, dRow)
+    if (legal) {
+      applyHoverTargets(drag.scratchTargets)
+    } else {
+      clearHoverTargets()
+    }
   }
 }
 
@@ -288,22 +308,19 @@ function onPointerUp(e: PointerEvent) {
   if (pieceElUp) {
     pieceElUp.style.setProperty('--drag-dx', '0px')
     pieceElUp.style.setProperty('--drag-dy', '0px')
+    pieceElUp.classList.remove('dragging')
   }
+  const boardEl = getBoardEl()
+  if (boardEl) boardEl.classList.remove('is-dragging')
+  clearHoverTargets()
   drag = null
-  draggingGroupId.value = null
-  hoverTargets.value = new Set()
-  dragLegal.value = false
 
   if (wasDrag) {
     if (dCol === 0 && dRow === 0) return
-    // moveGroup emits; the parent decides legality. If illegal it will
-    // simply do nothing and the piece has already sprung back visually.
     emit('moveGroup', pid, dCol, dRow)
     return
   }
 
-  // click behaviour: select a group; a second click on another group
-  // computes delta from the selected group''s anchor piece.
   const piece = pieceById(pid)
   if (!piece) return
   if (selectedGroupId.value === null) {
