@@ -1,140 +1,136 @@
-# 三处调整
+# 自拍模式难度上限约束
 
-## 一、圆环内数字上移到缺口位置
+## 目标
+1. 拼图切完总高度不能超出手机可视区，否则用户没法玩（要滑屏幕）。
+2. 自动算出"最高安全难度"，实时提示给用户，并且**不允许**用户选超过这个值的难度。
 
-### 现状
-`DifficultyDial.vue` 中心大数字在正中，滑动时容易被手指挡住。
+## 约束推导
 
-### 修改（`app/components/DifficultyDial.vue`）
-把 `<text>` 数字上移到圆环顶部缺口位置：
-- 当前 viewBox 是 `240x240`（或类似），圆心 `(cx, cy) = (120, 120)`，半径 `r ≈ 100`。
-- 数字 y 从 `cy` 改到 `cy - r * 0.55` 附近（大约在顶部缺口正下方一点，肉眼看在弧的开口"里面"）。具体值以 SVG 实际尺寸为准，目标是数字视觉中心落在两条弧末端连线上方。
-- 保持字体大小 48px 不变，`text-anchor="middle"`, `dominant-baseline="central"`。
-- 单位小字 "块" 放在数字**正下方**（原本在数字下方，跟着上移即可），保持 12px。
+PuzzleGame 里棋盘 `.puzzle-wrap` 的尺寸公式（当前）：
+- 宽约束：`min(100vw - 32, 560)`
+- 高约束：`min(100dvh - 240, 900)`
+- 内接图片 aspect，取更约束一侧为长边
+- 底线：任意格子 ≥ 50×50 CSS 逻辑像素
 
-## 二、休闲模式：开始前弹窗选难度
+"最高难度"其实等价于**在满足高度约束下，格数 = cols × rows 的最大值**。给定图片 aspect（旋转后 `a = W/H`）：
+- 令 wrapH 上限 = `min(window.innerHeight - 240, 900)`，wrapW 上限 = `min(window.innerWidth - 32, 560)`
+- 内接后 wrap 实际尺寸: 若 `wrapW_max / a <= wrapH_max` → `wrapW=wrapW_max, wrapH=wrapW_max/a`；否则 `wrapH=wrapH_max, wrapW=wrapH_max*a`
+- 每格必须 ≥ 50px 逻辑像素，所以 `cols ≤ wrapW/50`，`rows ≤ wrapH/50`
+- pickGrid 会按 aspect 选接近正方形的格子，所以最大格数近似 `floor(wrapW/50) * floor(wrapH/50)`
 
-### 修改
-1. 新建 `app/components/DifficultyModal.vue`：
-   - Props: `open: boolean`, `min=4, max=200`, `initial=48`。
-   - Emits: `confirm(value: number)`, `cancel()`。
-   - 模板：一层遮罩 `.modal-backdrop`（半透明黑，`position: fixed; inset: 0; z-index: 100`）+ 中间白卡 `.modal-card`：
-     ```html
-     <div v-if="open" class="modal-backdrop" @click.self="$emit('cancel')">
-       <div class="modal-card">
-         <h3>选择难度</h3>
-         <p class="hint">左低右高，滑动圆环选择</p>
-         <DifficultyDial v-model="local" :min="min" :max="max" label="块数" />
-         <div class="btns">
-           <button class="ghost-btn" @click="$emit('cancel')">取消</button>
-           <button class="primary-btn" @click="$emit('confirm', local)">开始游戏</button>
-         </div>
-       </div>
-     </div>
-     ```
-   - `local = ref(props.initial)`；`watch(() => props.open, (o) => { if (o) local.value = props.initial })`。
-   - 样式：卡片圆角 16px，padding 24px，宽度 `min(90vw, 360px)`，中间居中；按钮排一行右对齐；`.primary-btn` 用金色 `#d4af37`。
+⚠️ 注意 pickGrid 的搜索范围是 target ∈ [0.75×N, 1.3×N]，实际选出的总数会略偏离 N。为了保守，把上限再打 0.85 折。
 
-2. 改 `app/pages/play/casual.vue`：
-   ```vue
-   <template>
-     <DifficultyModal
-       :open="!pieceCountChosen"
-       :min="4" :max="200" :initial="48"
-       @confirm="onDifficultyConfirm"
-       @cancel="onDifficultyCancel"
-     />
-     <div v-if="current && pieceCountChosen">
-       <PuzzleGame
-         :image-url="current.url"
-         :piece-count="pieceCount"
-         mode-label="🌿 休闲模式"
-         :show-score="false"
-         next-label="下一张"
-         @success="onSuccess"
-         @fail="onFail"
-         @abort="onAbort"
-         @next="loadNext"
-       />
-     </div>
-     <div v-else-if="pieceCountChosen" class="card">加载中...</div>
-   </template>
+## 修改
 
-   <script setup lang="ts">
-   import { onMounted, ref, computed } from 'vue'
-   import PuzzleGame from '~/components/PuzzleGame.vue'
-   import DifficultyModal from '~/components/DifficultyModal.vue'
-   import { fetchCasualImages, type PuzzleImage } from '~/services/imageService'
-
-   const list = ref<PuzzleImage[]>([])
-   const idx = ref(0)
-   const pieceCount = ref(48)
-   const pieceCountChosen = ref(false)
-
-   const current = computed(() => list.value[idx.value])
-
-   onMounted(async () => {
-     const raw = await fetchCasualImages()
-     // Fisher-Yates shuffle
-     const arr = raw.slice()
-     for (let i = arr.length - 1; i > 0; i--) {
-       const j = Math.floor(Math.random() * (i + 1))
-       ;[arr[i], arr[j]] = [arr[j], arr[i]]
-     }
-     list.value = arr
-   })
-
-   function onDifficultyConfirm(v: number) {
-     pieceCount.value = v
-     pieceCountChosen.value = true
-   }
-   function onDifficultyCancel() { navigateTo('/') }
-   function loadNext() {
-     idx.value = (idx.value + 1) % list.value.length
-     // 难度不变
-   }
-   function onSuccess() {}
-   function onFail() {}
-   function onAbort() { navigateTo('/') }
-   </script>
-   ```
-
-## 三、休闲模式：30 张默认图片
-
-### 修改（`app/services/imageService.ts`）
-把 `fetchCasualImages` 从生成 12 张 SVG 改成返回 30 张**真实照片**。用 [Picsum Photos](https://picsum.photos) 免费图库（无需 API key，直接 URL 返回随机图片）：
-
+### A. 抽一个工具函数（新建 `app/utils/difficultyLimit.ts`）
 ```ts
-export async function fetchCasualImages(): Promise<PuzzleImage[]> {
-  // 30 个稳定 seed，每次同一 seed 返回同一张图；构建时确定，避免每次刷新变化
-  const seeds = [
-    'aurora','forest','ocean','desert','mountain','sunset','city','river','lake','field',
-    'canyon','meadow','glacier','harbor','vineyard','island','sakura','coast','valley','waterfall',
-    'lagoon','savanna','fjord','plateau','oasis','tundra','marsh','dune','reef','summit'
-  ]
-  const list: PuzzleImage[] = seeds.map((seed, i) => ({
-    id: i + 1,
-    url: `https://picsum.photos/seed/${seed}/800/600`,
-    title: seed
-  }))
-  return list
+export interface DifficultyLimitOpts {
+  imgW: number   // 图片原始宽
+  imgH: number   // 图片原始高
+  minCellPx?: number   // 默认 50
+  reserveH?: number    // 视口高度扣除量，默认 240（header/hud/items/footer）
+  reserveW?: number    // 视口宽度扣除量，默认 32（左右 padding）
+  maxWrapW?: number    // 默认 560
+  maxWrapH?: number    // 默认 900
+  hardMin?: number     // 拼图最少块数，默认 4
+  hardMax?: number     // 拼图最多块数，默认 200
+  vw?: number          // 传入以便 SSR / 测试
+  vh?: number
+}
+
+export function computeMaxPieces(o: DifficultyLimitOpts): number {
+  const minCell = o.minCellPx ?? 50
+  const reserveH = o.reserveH ?? 240
+  const reserveW = o.reserveW ?? 32
+  const maxWrapW = o.maxWrapW ?? 560
+  const maxWrapH = o.maxWrapH ?? 900
+  const hardMax = o.hardMax ?? 200
+  const hardMin = o.hardMin ?? 4
+  const vw = o.vw ?? (typeof window !== 'undefined' ? window.innerWidth : 400)
+  const vh = o.vh ?? (typeof window !== 'undefined' ? window.innerHeight : 800)
+
+  // 视口竖屏但图片横向 → 旋转后 W↔H 交换（与 usePuzzleGame 逻辑保持一致）
+  const portraitViewport = vh >= vw
+  const portraitImage = o.imgH >= o.imgW
+  const rotated = portraitViewport && !portraitImage
+  const W = rotated ? o.imgH : o.imgW
+  const H = rotated ? o.imgW : o.imgH
+  const a = W / H
+
+  const capW = Math.min(vw - reserveW, maxWrapW)
+  const capH = Math.min(vh - reserveH, maxWrapH)
+  // 内接矩形
+  let wrapW = capW, wrapH = capW / a
+  if (wrapH > capH) { wrapH = capH; wrapW = capH * a }
+
+  const maxCols = Math.max(2, Math.floor(wrapW / minCell))
+  const maxRows = Math.max(2, Math.floor(wrapH / minCell))
+  // pickGrid 会按 aspect 选接近正方形的格子；上限约等于 maxCols*maxRows，再保守 0.85 倍
+  const raw = Math.floor(maxCols * maxRows * 0.85)
+  return Math.min(hardMax, Math.max(hardMin, raw))
 }
 ```
-- Picsum 的 `seed/xxx` URL 返回固定内容，浏览器可缓存。
-- 800×600 是横向图，会触发我们的"竖屏时旋转"逻辑，正好测试旋转分支。
-- 若 Picsum 慢或被墙，替代方案：把 seeds 数量改小 or 换成 `https://source.unsplash.com/random/800x600?nature&sig=${i}`。**首选 Picsum**，稳定可缓存。
-- ⚠️ Picsum 是 HTTPS，Nuxt/Vercel 侧无需配置。canvas 旋转时 `img.crossOrigin` 需要设置为 `"anonymous"` 才能画到 canvas 后 `toDataURL` —— **重要**：检查 `usePuzzleGame.ts` 里 `new Image()` 有没有设 crossOrigin。如果没设，会触发 tainted canvas 错误导致旋转分支失败。需要改成：
-   ```ts
-   const img = new Image()
-   img.crossOrigin = 'anonymous'
-   img.src = opts.imageUrl
-   await img.decode().catch(() => {})
-   ```
-   Picsum 响应有 `Access-Control-Allow-Origin: *`，兼容。
 
-## 四、交付
+### B. `selfie.vue` 集成
+
+1. **拿到最新一张预览图的 naturalWidth/naturalHeight**（用最后一张作为约束依据；也可以取最"极端"的一张，先按"最后一张"实现简单可靠）：
+   ```ts
+   const imgDim = ref<{ w: number; h: number } | null>(null)
+
+   function measureImage(url: string) {
+     const im = new Image()
+     im.onload = () => { imgDim.value = { w: im.naturalWidth, h: im.naturalHeight } }
+     im.src = url
+   }
+   // onFileSelect 里 reader.onload 时 push 后调用 measureImage(reader.result)
+   // capture 里 push 后调用 measureImage(data)
+   // 每次 images 变化时用最后一张的尺寸
+   ```
+   实际实现：把 measure 逻辑做成"每次 push 一张就更新 imgDim 为该张的尺寸"，并且 `removeImage` 时若删掉的是最后一张，回退到前一张的尺寸（简化：干脆每次 images 变都重测最后一张）。
+
+2. **计算 maxPieces**（响应式，随 imgDim / viewport 变化）：
+   ```ts
+   import { computeMaxPieces } from '~/utils/difficultyLimit'
+   const viewportTick = ref(0)
+   onMounted(() => {
+     const handler = () => viewportTick.value++
+     window.addEventListener('resize', handler)
+     window.addEventListener('orientationchange', handler)
+     onBeforeUnmount(() => {
+       window.removeEventListener('resize', handler)
+       window.removeEventListener('orientationchange', handler)
+     })
+   })
+   const maxPieces = computed(() => {
+     viewportTick.value  // 依赖
+     if (!imgDim.value) return 200
+     return computeMaxPieces({ imgW: imgDim.value.w, imgH: imgDim.value.h })
+   })
+   ```
+
+3. **DifficultyDial 的 max 绑定用 `maxPieces`**：
+   ```html
+   <DifficultyDial v-model="pieceCount" :min="4" :max="maxPieces" label="切块数" />
+   ```
+   同时 `range-hint` 右侧文案改成动态：`{{ maxPieces }} (最难)`。
+
+4. **超限自动 clamp**：`watch(maxPieces, (m) => { if (pieceCount.value > m) pieceCount.value = m })`。
+
+5. **提示文案**：在 `.difficulty` 下面加一行小字：
+   ```html
+   <p class="limit-hint" v-if="imgDim">
+     根据当前手机屏幕和图片比例，最高难度 <strong>{{ maxPieces }}</strong> 块；再高会超出屏幕。
+   </p>
+   ```
+   样式 `font-size: 12px; color: var(--color-text-soft); text-align: center;`
+
+6. **randomize 也 clamp**：`pieceCount.value = randInt(4, maxPieces.value)`。
+
+7. **开始按钮附加二次校验**（保险）：`startGame` 里若 `pieceCount.value > maxPieces.value`，alert 并 return。
+
+## 交付
 
 1. `npm run build` 通过。
-2. `git add -A && git commit -m "feat(casual): difficulty modal + 30 shuffled images; ui(dial): number up"`。
+2. `git add -A && git commit -m "feat(selfie): cap difficulty by viewport & image ratio"`。
 3. `git push origin master`（失败重试一次）。
 4. 全程自主完成，不要询问。

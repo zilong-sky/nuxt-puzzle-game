@@ -1,4 +1,4 @@
-<!-- app/pages/play/selfie.vue - 自拍上传模式：本地图/摄像头拍照 + 难度自选 + 多图顺序游玩 -->
+﻿<!-- app/pages/play/selfie.vue - 自拍上传模式：本地图/摄像头拍照 + 难度自选 + 多图顺序游玩 -->
 <template>
   <div>
     <div v-if="!gameStarted" class="card setup">
@@ -21,12 +21,15 @@
       </div>
 
       <div class="difficulty">
-        <DifficultyDial v-model="pieceCount" :min="4" :max="200" label="切块数" />
+        <DifficultyDial v-model="pieceCount" :min="4" :max="maxPieces" label="切块数" />
         <div class="range-hint">
           <span>4 (简单)</span>
-          <span>200 (地狱)</span>
+          <span>{{ maxPieces }} (最难)</span>
         </div>
         <button class="ghost-btn" @click="randomize">🎲 随机难度</button>
+        <p class="limit-hint" v-if="imgDim">
+          根据当前手机屏幕和图片比例，最高难度 <strong>{{ maxPieces }}</strong> 块；再高会超出屏幕。
+        </p>
       </div>
 
       <div class="actions">
@@ -72,12 +75,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PuzzleGame from '~/components/PuzzleGame.vue'
 import ModalDialog from '~/components/ModalDialog.vue'
 import DifficultyDial from '~/components/DifficultyDial.vue'
 import { uploadImage } from '~/services/imageService'
 import { randInt } from '~/utils/random'
+import { computeMaxPieces } from '~/utils/difficultyLimit'
 
 const images = ref<string[]>([])
 const pieceCount = ref(randInt(30, 80))
@@ -91,8 +95,28 @@ let stream: MediaStream | null = null
 
 const askUpload = ref(false)
 
+const imgDim = ref<{ w: number; h: number } | null>(null)
+const viewportTick = ref(0)
+
+function measureImage(url: string) {
+  const im = new Image()
+  im.onload = () => { imgDim.value = { w: im.naturalWidth, h: im.naturalHeight } }
+  im.src = url
+}
+
 const current = computed(() => images.value[idx.value])
 const hasNext = computed(() => idx.value < images.value.length - 1)
+
+const maxPieces = computed(() => {
+  // 依赖 viewport 变化
+  void viewportTick.value
+  if (!imgDim.value) return 200
+  return computeMaxPieces({ imgW: imgDim.value.w, imgH: imgDim.value.h })
+})
+
+watch(maxPieces, (m) => {
+  if (pieceCount.value > m) pieceCount.value = m
+})
 
 function onFileSelect(e: Event) {
   const files = (e.target as HTMLInputElement).files
@@ -100,7 +124,10 @@ function onFileSelect(e: Event) {
   Array.from(files).forEach((f) => {
     const reader = new FileReader()
     reader.onload = () => {
-      if (typeof reader.result === 'string') images.value.push(reader.result)
+      if (typeof reader.result === 'string') {
+        images.value.push(reader.result)
+        measureImage(reader.result)
+      }
     }
     reader.readAsDataURL(f)
   })
@@ -108,6 +135,9 @@ function onFileSelect(e: Event) {
 
 function removeImage(i: number) {
   images.value.splice(i, 1)
+  const last = images.value[images.value.length - 1]
+  if (last) measureImage(last)
+  else imgDim.value = null
 }
 
 async function onCameraClick() {
@@ -141,15 +171,21 @@ function capture() {
   ctx.drawImage(v, 0, 0, c.width, c.height)
   const data = c.toDataURL('image/jpeg', 0.85)
   images.value.push(data)
+  measureImage(data)
   closeCamera()
 }
 
 function randomize() {
-  pieceCount.value = randInt(4, 200)
+  pieceCount.value = randInt(4, maxPieces.value)
 }
 
 function startGame() {
   if (!images.value.length) return
+  if (pieceCount.value > maxPieces.value) {
+    alert(`当前屏幕和图片比例下，最高难度 ${maxPieces.value} 块。已自动下调。`)
+    pieceCount.value = maxPieces.value
+    return
+  }
   idx.value = 0
   gameStarted.value = true
 }
@@ -162,7 +198,7 @@ function onNext() {
   askUpload.value = false
   if (hasNext.value) {
     idx.value += 1
-    pieceCount.value = randInt(30, 80)
+    pieceCount.value = Math.min(randInt(30, 80), maxPieces.value)
   } else {
     gameStarted.value = false
     images.value = []
@@ -182,7 +218,21 @@ async function doUpload() {
   onNext()
 }
 
-onBeforeUnmount(closeCamera)
+let viewportHandler: (() => void) | null = null
+onMounted(() => {
+  viewportHandler = () => { viewportTick.value++ }
+  window.addEventListener('resize', viewportHandler)
+  window.addEventListener('orientationchange', viewportHandler)
+})
+
+onBeforeUnmount(() => {
+  closeCamera()
+  if (viewportHandler) {
+    window.removeEventListener('resize', viewportHandler)
+    window.removeEventListener('orientationchange', viewportHandler)
+    viewportHandler = null
+  }
+})
 </script>
 
 <style scoped>
@@ -210,6 +260,7 @@ onBeforeUnmount(closeCamera)
 }
 .difficulty { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .range-hint { display: flex; justify-content: space-between; width: 240px; max-width: 100%; font-size: 12px; color: var(--color-text-soft); }
+.limit-hint { font-size: 12px; color: var(--color-text-soft); text-align: center; margin: 4px 0 0; }
 .actions { display: flex; gap: 10px; }
 .ghost-btn { background: transparent; color: var(--color-text); border: 1px solid var(--color-border); }
 .cam-wrap video { width: 100%; border-radius: 6px; background: #000; }
