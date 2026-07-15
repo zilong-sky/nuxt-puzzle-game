@@ -1,224 +1,110 @@
-# 加载进度条
+# 自拍模式：上次选择的图片本地缓存
 
 ## 目标
-用户从菜单点进游戏后，或者切换到下一张图时，如果图片还在下载/decode/切块，页面看起来卡了。需要一个覆盖在棋盘位置的进度条，让用户明确知道在加载。整个 init() 过程都在 loading 状态里，直到实际能玩。
+用户上次在自拍模式选好的照片（相机拍的 + 相册选的），下次再进这个页面时自动回显在预览区，不用重新挑；同时能一键清空。
 
-## 修改
+## 存储方案
 
-### A. `app/composables/usePuzzleGame.ts` 暴露加载状态
+- 存储：`localStorage`，key = `puzzle-selfie-images-v1`
+- 内容：dataURL 数组 JSON。因为 localStorage 单域上限 ~5MB，需要保守限流：
+  - 单张 dataURL 超过 1.5MB 时跳过（相机拍的通常 100-500KB，相册选的可能 2-4MB 需要压缩后再存，先简单跳过）。
+  - 累加超过 4MB 时截断，仅保留能塞下的前 N 张。
+  - 若第一张就超，`try { localStorage.setItem(...) } catch { console.warn; 清空 }`。
+- 触发时机：
+  - `onMounted`：读取，赋值给 `images.value`，并调用 `measureImage` 测最后一张。
+  - `watch(images, ..., { deep: false })`：数组变化时写回。（Vue3 ref 数组本身 push/splice 是浅层触发，deep:false 够用）
 
-新增 refs：
+## 修改（`app/pages/play/selfie.vue`）
+
+### 1. 顶部导入 & 常量
+
 ```ts
-const loading = ref(true)      // true 表示 init 还没完成
-const loadProgress = ref(0)    // 0 - 100
+const CACHE_KEY = 'puzzle-selfie-images-v1'
+const MAX_BYTES = 4 * 1024 * 1024   // 4MB
+const PER_ITEM_MAX_BYTES = 1.5 * 1024 * 1024
 ```
-在 return 里加入。
 
-改 `init()` 顺序，按阶段更新进度：
+### 2. onMounted 里加载
 
 ```ts
-async function init() {
-  loading.value = true
-  loadProgress.value = 0
-
-  // 阶段 A：下载图片（用 fetch 读 stream 拿真实字节进度；失败/无 content-length 时降级为虚拟进度）
-  let rawW = 1, rawH = 1
-  let imgObjectUrl: string | null = null
-  let imgSrcForRotate: string = opts.imageUrl
-
-  if (opts.imageUrl && typeof fetch !== 'undefined') {
-    try {
-      const isDataUrl = opts.imageUrl.startsWith('data:')
-      const isBlobUrl = opts.imageUrl.startsWith('blob:')
-      if (isDataUrl || isBlobUrl) {
-        // 本地已就绪，直接跳到 60%
-        loadProgress.value = 60
-      } else {
-        const resp = await fetch(opts.imageUrl, { mode: 'cors' })
-        const total = Number(resp.headers.get('content-length') || 0)
-        const reader = resp.body?.getReader()
-        if (reader && total > 0) {
-          const chunks: Uint8Array[] = []
-          let received = 0
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            if (value) {
-              chunks.push(value)
-              received += value.length
-              // 下载占 0 - 60
-              loadProgress.value = Math.min(60, Math.round((received / total) * 60))
-            }
-          }
-          const blob = new Blob(chunks)
-          imgObjectUrl = URL.createObjectURL(blob)
-          imgSrcForRotate = imgObjectUrl
-        } else {
-          // 无 stream 或无 content-length：把响应转 blob，用虚拟进度
-          loadProgress.value = 30
-          const blob = await resp.blob()
-          imgObjectUrl = URL.createObjectURL(blob)
-          imgSrcForRotate = imgObjectUrl
-          loadProgress.value = 60
-        }
+onMounted(() => {
+  // ... 现有 resize/orientationchange 监听保留
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    if (raw) {
+      const arr = JSON.parse(raw)
+      if (Array.isArray(arr) && arr.every((x) => typeof x === 'string' && x.startsWith('data:'))) {
+        images.value = arr
+        // 测最后一张，让 maxPieces 立刻正确
+        if (arr.length > 0) measureImage(arr[arr.length - 1])
       }
-    } catch {
-      // fetch 失败：降级，让 Image() 自己去加载
-      imgSrcForRotate = opts.imageUrl
-      loadProgress.value = 30
     }
-  }
+  } catch { /* ignore */ }
+})
+```
 
-  // 阶段 B：Image + decode（占 60 → 80）
-  if (typeof Image !== 'undefined' && opts.imageUrl) {
-    try {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.src = imgSrcForRotate
-      const anyImg = img as unknown as { decode?: () => Promise<void> }
-      if (typeof anyImg.decode === 'function') {
-        await anyImg.decode.call(img).catch(() => {})
-      } else {
-        await new Promise<void>((resolve) => {
-          img.onload = () => resolve()
-          img.onerror = () => resolve()
-        })
-      }
-      loadProgress.value = 80
-      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-        rawW = img.naturalWidth
-        rawH = img.naturalHeight
-      }
-      // 阶段 C：旋转（占 80 → 90）
-      const portraitViewport = typeof window !== 'undefined' ? window.innerHeight >= window.innerWidth : true
-      const landscapeImage = rawW > rawH
-      if (portraitViewport && landscapeImage && typeof document !== 'undefined') {
-        try {
-          const canvas = document.createElement('canvas')
-          canvas.width = rawH
-          canvas.height = rawW
-          const ctx = canvas.getContext('2d')
-          if (ctx) {
-            ctx.translate(rawH, 0)
-            ctx.rotate(Math.PI / 2)
-            ctx.drawImage(img, 0, 0)
-            renderImageUrl.value = canvas.toDataURL('image/jpeg', 0.92)
-            const tmp = rawW; rawW = rawH; rawH = tmp
-          } else {
-            renderImageUrl.value = imgObjectUrl || opts.imageUrl
-          }
-        } catch {
-          renderImageUrl.value = imgObjectUrl || opts.imageUrl
-        }
-      } else {
-        renderImageUrl.value = imgObjectUrl || opts.imageUrl
-      }
-      loadProgress.value = 90
-    } catch {
-      renderImageUrl.value = imgObjectUrl || opts.imageUrl
+### 3. 写回
+
+```ts
+function persistImages() {
+  try {
+    let total = 0
+    const kept: string[] = []
+    for (const url of images.value) {
+      const size = url.length // 近似字节数（base64 每 4 字符 ≈ 3 字节，做保守估算按字符数）
+      if (size > PER_ITEM_MAX_BYTES) continue
+      if (total + size > MAX_BYTES) break
+      kept.push(url)
+      total += size
     }
+    localStorage.setItem(CACHE_KEY, JSON.stringify(kept))
+  } catch {
+    // 配额溢出：清掉旧的，再试写空
+    try { localStorage.removeItem(CACHE_KEY) } catch {}
   }
+}
 
-  // 阶段 D：pickGrid + generate + shuffle（占 90 → 100）
-  boardW.value = rawW
-  boardH.value = rawH
-  aspect.value = rawW / rawH
-  const grid = pickGrid(opts.pieceCount, rawW, rawH)
-  cols.value = grid.cols
-  rows.value = grid.rows
-  const cw = rawW / grid.cols
-  const ch = rawH / grid.rows
-  const base = generateGridPieces(grid.cols, grid.rows, rawW, rawH)
-  let indices = base.map((_, i) => i)
-  if (indices.length > 1) {
-    let tries = 0
-    do {
-      indices = shufflePieces(indices)
-      tries++
-    } while (indices.every((v, i) => v === i) && tries < 5)
-  }
-  pieces.value = base.map((p, i) => ({
-    ...p, w: cw, h: ch,
-    slotIndex: indices[i]!,
-    groupId: p.id,
-    groupAligned: false
-  }))
-  recomputeGroups()
-  timeLeft.value = calcCountdown(base.length)
-  running.value = true
-  finished.value = false
-  failed.value = false
-  frozen.value = false
-  startTimer()
-  loadProgress.value = 100
-  loading.value = false
+watch(images, () => persistImages(), { deep: false })
+```
+
+（`images` 是 `ref<string[]>`，`push/splice` 会触发 watch。）
+
+### 4. UI 提示 + 清空按钮
+
+在 `<div class="preview" v-if="images.length">` 下方（保留 preview 网格）新增一行：
+
+```html
+<div v-if="images.length" class="preview-actions">
+  <span class="preview-note">已保存 {{ images.length }} 张，下次进入自动回显</span>
+  <button class="ghost-btn small" @click="clearImages">清空</button>
+</div>
+```
+
+```ts
+function clearImages() {
+  images.value = []
+  imgDim.value = null
+  try { localStorage.removeItem(CACHE_KEY) } catch {}
 }
 ```
 
-**注意**：`init()` 被 `watch(() => [imageUrl, pieceCount])` 反复调用，切图时也会走一遍进度。旧的 objectURL 应该在下一次 init 前 revoke —— 用一个模块级 `let lastObjectUrl: string | null = null`，每次开始时若有则 `URL.revokeObjectURL(lastObjectUrl)`，然后赋新的。
+样式追加：
+```css
+.preview-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 4px;
+}
+.preview-note { font-size: 12px; color: var(--color-text-soft); }
+.ghost-btn.small { padding: 4px 10px; font-size: 12px; flex: 0 0 auto; }
+```
 
-### B. `app/components/PuzzleGame.vue` 展示进度覆盖层
+### 5. 通关/放弃时不清空
 
-1. 从 `usePuzzleGame` 解构 `loading, loadProgress`：
-   ```ts
-   const {
-     cols, rows, aspect, renderImageUrl,
-     pieces, timeLeft, running, finished, failed, frozen,
-     placedCount,
-     loading, loadProgress,
-     init, moveGroup, moveGroupToSlot, useRestore, useFreeze, reviveByAd
-   } = usePuzzleGame({...})
-   ```
-
-2. 在 `.board-holder` 内加覆盖层：
-   ```html
-   <div class="board-holder">
-     <PuzzleBoard ... />
-     <div v-if="loading" class="loading-overlay">
-       <div class="loading-card">
-         <div class="loading-title">正在加载图片…</div>
-         <div class="progress-track">
-           <div class="progress-fill" :style="{ width: loadProgress + '%' }"></div>
-         </div>
-         <div class="progress-num">{{ loadProgress }}%</div>
-       </div>
-     </div>
-   </div>
-   ```
-
-3. 样式：
-   ```css
-   .board-holder { position: relative; }
-   .loading-overlay {
-     position: absolute; inset: 0;
-     display: flex; align-items: center; justify-content: center;
-     background: rgba(255,255,255,0.85);
-     backdrop-filter: blur(2px);
-     z-index: 20;
-     border-radius: var(--radius-md);
-   }
-   .loading-card {
-     display: flex; flex-direction: column; gap: 10px;
-     align-items: center; min-width: 200px; padding: 20px 24px;
-     background: #fff; border-radius: 12px; box-shadow: var(--shadow-sm);
-   }
-   .loading-title { font-size: 14px; color: var(--color-text); font-weight: 600; }
-   .progress-track {
-     width: 180px; height: 8px; border-radius: 999px;
-     background: #e5e7eb; overflow: hidden;
-   }
-   .progress-fill {
-     height: 100%; background: #d4af37;
-     transition: width 0.15s linear;
-   }
-   .progress-num { font-size: 12px; color: var(--color-text-soft); }
-   ```
-
-4. **让 HUD 计时器不要在 loading 时倒数**：其实 `running` 在 `init` 快结束才被置 true，`startTimer` 也在最后，所以 loading 期间没问题；确认无需额外处理。
+不动 `onSuccess/onFail/onAbort/onNext` 的现有逻辑。用户想清就点"清空"按钮。
 
 ## 交付
 
 1. `npm run build` 通过。
-2. `git add -A && git commit -m "feat(loading): board-level progress overlay while init"`。
+2. `git add -A && git commit -m "feat(selfie): cache last picked images in localStorage"`。
 3. `git push origin master`（失败重试一次）。
 4. 全程自主完成，不要询问。

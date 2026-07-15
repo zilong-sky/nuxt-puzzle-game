@@ -1,4 +1,4 @@
-﻿<!-- app/pages/play/selfie.vue - 自拍上传模式：本地图/摄像头拍照 + 难度自选 + 多图顺序游玩 -->
+<!-- app/pages/play/selfie.vue - 自拍上传模式：本地图/摄像头拍照 + 难度自选 + 多图顺序游玩 -->
 <template>
   <div>
     <div v-if="!gameStarted" class="card setup">
@@ -18,6 +18,11 @@
           <img :src="img" alt="预览" />
           <button class="remove" @click="removeImage(i)">×</button>
         </div>
+      </div>
+
+      <div v-if="images.length" class="preview-actions">
+        <span class="preview-note">已保存 {{ images.length }} 张，下次进入自动回显</span>
+        <button class="ghost-btn small" @click="clearImages">清空</button>
       </div>
 
       <div class="difficulty">
@@ -84,6 +89,9 @@ import { randInt } from '~/utils/random'
 import { computeMaxPieces } from '~/utils/difficultyLimit'
 
 const images = ref<string[]>([])
+const CACHE_KEY = 'puzzle-selfie-images-v1'
+const MAX_BYTES = 4 * 1024 * 1024
+const PER_ITEM_MAX_BYTES = 1.5 * 1024 * 1024
 const pieceCount = ref(randInt(30, 80))
 const gameStarted = ref(false)
 const idx = ref(0)
@@ -139,6 +147,31 @@ function removeImage(i: number) {
   if (last) measureImage(last)
   else imgDim.value = null
 }
+
+function clearImages() {
+  images.value = []
+  imgDim.value = null
+  try { localStorage.removeItem(CACHE_KEY) } catch {}
+}
+
+function persistImages() {
+  try {
+    let total = 0
+    const kept: string[] = []
+    for (const url of images.value) {
+      const size = url.length
+      if (size > PER_ITEM_MAX_BYTES) continue
+      if (total + size > MAX_BYTES) break
+      kept.push(url)
+      total += size
+    }
+    localStorage.setItem(CACHE_KEY, JSON.stringify(kept))
+  } catch {
+    try { localStorage.removeItem(CACHE_KEY) } catch {}
+  }
+}
+
+watch(images, () => persistImages(), { deep: false })
 
 async function onCameraClick() {
   cameraOn.value = true
@@ -223,6 +256,16 @@ onMounted(() => {
   viewportHandler = () => { viewportTick.value++ }
   window.addEventListener('resize', viewportHandler)
   window.addEventListener('orientationchange', viewportHandler)
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    if (raw) {
+      const arr = JSON.parse(raw)
+      if (Array.isArray(arr) && arr.every((x) => typeof x === 'string' && x.startsWith('data:'))) {
+        images.value = arr
+        if (arr.length > 0) measureImage(arr[arr.length - 1])
+      }
+    }
+  } catch { /* ignore */ }
 })
 
 onBeforeUnmount(() => {
@@ -252,6 +295,12 @@ onBeforeUnmount(() => {
 }
 .preview-item { position: relative; }
 .preview-item img { width: 100%; height: 80px; object-fit: cover; border-radius: 6px; }
+.preview-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 4px;
+}
+.preview-note { font-size: 12px; color: var(--color-text-soft); }
+.ghost-btn.small { padding: 4px 10px; font-size: 12px; flex: 0 0 auto; }
 .remove {
   position: absolute; top: -6px; right: -6px;
   width: 22px; height: 22px; padding: 0;
