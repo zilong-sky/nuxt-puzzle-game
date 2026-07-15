@@ -47,6 +47,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   const finished = ref(false)
   const failed = ref(false)
   const frozen = ref(false)
+  /** True if the source image is landscape and should be rendered rotated 90deg CW. */
+  const rotated = ref(false)
 
   let timerId: ReturnType<typeof setInterval> | null = null
   let freezeTimeoutId: ReturnType<typeof setTimeout> | null = null
@@ -140,7 +142,31 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }
   }
 
-  function init() {
+  async function init() {
+    // Detect landscape source so the render layer can rotate 90deg CW.
+    // The source URL/file is never mutated -- rotation is presentation only.
+    rotated.value = false
+    if (typeof Image !== 'undefined' && opts.imageUrl) {
+      try {
+        const img = new Image()
+        img.src = opts.imageUrl
+        const anyImg = img as unknown as { decode?: () => Promise<void> }
+        if (typeof anyImg.decode === 'function') {
+          await anyImg.decode.call(img).catch(() => {})
+        } else {
+          await new Promise<void>((resolve) => {
+            img.onload = () => resolve()
+            img.onerror = () => resolve()
+          })
+        }
+        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+          rotated.value = img.naturalWidth > img.naturalHeight
+        }
+      } catch {
+        rotated.value = false
+      }
+    }
+    // Board is always square; pickGrid returns cols === rows.
     const grid = pickGrid(opts.pieceCount, boardW, boardH)
     cols.value = grid.cols
     rows.value = grid.rows
@@ -302,6 +328,7 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     finished,
     failed,
     frozen,
+    rotated,
     placedCount,
     init,
     moveGroup,

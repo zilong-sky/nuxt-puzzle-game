@@ -12,7 +12,13 @@
       class="board"
       :style="{ aspectRatio: `${boardW} / ${boardH}` }"
     >
-      <img class="board-ghost" :src="imageUrl" alt="" draggable="false" />
+      <img
+        class="board-ghost"
+        :class="{ rotated }"
+        :src="imageUrl"
+        alt=""
+        draggable="false"
+      />
       <div
         v-for="s in slots"
         :key="`slot-${s.index}`"
@@ -34,7 +40,7 @@
         :style="pieceStyle(p)"
         @pointerdown="onPointerDown($event, p.id)"
       >
-        <div class="piece-fill" :style="fillStyle(p)" />
+        <div class="piece-fill" :class="{ rotated }" :style="fillStyle(p)" />
       </div>
     </div>
   </div>
@@ -44,14 +50,18 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import type { PieceState } from '~/composables/usePuzzleGame'
 
-const props = defineProps<{
-  imageUrl: string
-  pieces: PieceState[]
-  cols: number
-  rows: number
-  boardW: number
-  boardH: number
-}>()
+const props = withDefaults(
+  defineProps<{
+    imageUrl: string
+    pieces: PieceState[]
+    cols: number
+    rows: number
+    boardW: number
+    boardH: number
+    rotated?: boolean
+  }>(),
+  { rotated: false }
+)
 
 const emit = defineEmits<{
   moveGroup: [pieceId: number, dCol: number, dRow: number]
@@ -133,10 +143,21 @@ function pieceStyle(p: PieceState): Record<string, string> {
 
 function fillStyle(p: PieceState): Record<string, string> {
   const ins = neighborInsets(p)
-  const bgW = props.cols * 100
-  const bgH = props.rows * 100
-  const bgX = props.cols > 1 ? (p.col / (props.cols - 1)) * 100 : 0
-  const bgY = props.rows > 1 ? (p.row / (props.rows - 1)) * 100 : 0
+  // Rotation is applied visually via CSS transform on .piece-fill. The
+  // background image itself stays untouched, but the sub-region shown by
+  // each piece is remapped so the rotated result reads correctly.
+  // 90deg CW mapping: original (r', c') = (n-1-col, row) with a square grid.
+  const bgW = (props.rotated ? props.rows : props.cols) * 100
+  const bgH = (props.rotated ? props.cols : props.rows) * 100
+  let bgX = 0
+  let bgY = 0
+  if (props.rotated) {
+    bgX = props.rows > 1 ? (p.row / (props.rows - 1)) * 100 : 0
+    bgY = props.cols > 1 ? ((props.cols - 1 - p.col) / (props.cols - 1)) * 100 : 0
+  } else {
+    bgX = props.cols > 1 ? (p.col / (props.cols - 1)) * 100 : 0
+    bgY = props.rows > 1 ? (p.row / (props.rows - 1)) * 100 : 0
+  }
   return {
     top: `${ins.t}px`,
     right: `${ins.r}px`,
@@ -319,6 +340,10 @@ onBeforeUnmount(() => {
   filter: grayscale(0.4) blur(1px);
   pointer-events: none;
 }
+.board-ghost.rotated {
+  transform: rotate(90deg);
+  transform-origin: center center;
+}
 .slot {
   position: absolute;
   background: transparent;
@@ -350,6 +375,10 @@ onBeforeUnmount(() => {
   outline: 2px solid transparent;
   outline-offset: -2px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.piece-fill.rotated {
+  transform: rotate(90deg);
+  transform-origin: center center;
 }
 .piece.selected .piece-fill {
   outline-color: #f5c451;

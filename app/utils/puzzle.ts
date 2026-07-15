@@ -24,30 +24,21 @@ export interface Piece {
 }
 
 /**
- * Pick a reasonable cols x rows split for a target block count and image
- * aspect ratio. The chosen total stays within [target * 0.8, target * 1.2].
+ * Pick a square grid (cols === rows) with total block count near the
+ * requested target. Rotation is handled in usePuzzleGame, so the aspect
+ * arguments are ignored (kept only for source-compat). Formula:
+ *   n = clamp( round(sqrt(target)), 2, floor(sqrt(target * 1.2)) ).
  */
-export function pickGrid(blocks: number, imgW = 1, imgH = 1): { rows: number; cols: number } {
+export function pickGrid(
+  blocks: number,
+  _imgW: number = 1,
+  _imgH: number = 1
+): { rows: number; cols: number } {
   const target = Math.max(4, Math.floor(blocks))
-  const ratio = imgW / imgH
-  const idealCols = Math.sqrt(target * ratio)
-  const candidates: { cols: number; rows: number; score: number }[] = []
-  const lo = Math.max(2, Math.floor(idealCols) - 2)
-  const hi = Math.max(lo + 1, Math.ceil(idealCols) + 2)
-  for (let c = lo; c <= hi; c++) {
-    const r = Math.max(2, Math.round(target / c))
-    const total = c * r
-    if (total < target * 0.8 || total > target * 1.2) continue
-    const aspectDiff = Math.abs(c / r - ratio)
-    const countDiff = Math.abs(total - target) / target
-    candidates.push({ cols: c, rows: r, score: aspectDiff + countDiff })
-  }
-  if (candidates.length === 0) {
-    const cols = Math.max(2, Math.round(idealCols))
-    return { cols, rows: Math.max(2, Math.round(target / cols)) }
-  }
-  candidates.sort((a, b) => a.score - b.score)
-  return { cols: candidates[0].cols, rows: candidates[0].rows }
+  const raw = Math.round(Math.sqrt(target))
+  const upper = Math.max(2, Math.floor(Math.sqrt(target * 1.2)))
+  const n = Math.max(2, Math.min(raw, upper))
+  return { rows: n, cols: n }
 }
 
 /**

@@ -30,6 +30,7 @@
         :rows="rows"
         :board-w="boardW"
         :board-h="boardH"
+        :rotated="rotated"
         @move-group="onMoveGroup"
         @move-group-to-slot="onMoveGroupToSlot"
       />
@@ -75,7 +76,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, nextTick, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import PuzzleBoard from './PuzzleBoard.vue'
 import ModalDialog from './ModalDialog.vue'
 import AdModal from './AdModal.vue'
@@ -97,7 +98,7 @@ const game = useGameStore()
 
 const {
   boardW, boardH, cols, rows,
-  pieces, timeLeft, running, finished, failed, frozen,
+  pieces, timeLeft, running, finished, failed, frozen, rotated,
   placedCount,
   init, moveGroup, moveGroupToSlot, useRestore, useFreeze, reviveByAd
 } = usePuzzleGame({
@@ -144,47 +145,22 @@ function onAdDone() {
 const hudRef = ref<HTMLElement | null>(null)
 const itemsRef = ref<HTMLElement | null>(null)
 
-function measureChrome() {
-  if (typeof window === 'undefined') return
-  const header = document.querySelector('.app-header') as HTMLElement | null
-  const footer = document.querySelector('.app-footer') as HTMLElement | null
-  const main = document.querySelector('.main-content') as HTMLElement | null
-  const hudH = hudRef.value?.getBoundingClientRect().height ?? 0
-  const itemsH = itemsRef.value?.getBoundingClientRect().height ?? 0
-  const headerH = header?.getBoundingClientRect().height ?? 0
-  const footerH = footer?.getBoundingClientRect().height ?? 0
-  let padY = 0
-  if (main) {
-    const cs = getComputedStyle(main)
-    padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
-  }
-  const gaps = 16
-  const total = Math.ceil(headerH + footerH + hudH + itemsH + padY + gaps)
-  document.documentElement.style.setProperty('--chrome-h', total + 'px')
-}
-
-let ro: ResizeObserver | null = null
-onMounted(() => {
-  nextTick(() => {
-    measureChrome()
-    if (typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(() => measureChrome())
-      if (hudRef.value) ro.observe(hudRef.value)
-      if (itemsRef.value) ro.observe(itemsRef.value)
-      const header = document.querySelector('.app-header')
-      const footer = document.querySelector('.app-footer')
-      if (header) ro.observe(header)
-      if (footer) ro.observe(footer)
+// Board sizing is fully CSS-driven now. The board is always square with a
+// hard 50px min-per-cell floor, so we simply expose the grid dimension `n`
+// (cols === rows) as a CSS variable and let the media rules do the rest.
+watch(
+  () => cols.value,
+  (n) => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.setProperty('--puzzle-n', String(n))
     }
-    window.addEventListener('resize', measureChrome)
-    window.addEventListener('orientationchange', measureChrome)
-  })
-})
+  },
+  { immediate: true }
+)
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', measureChrome)
-  window.removeEventListener('orientationchange', measureChrome)
-  ro?.disconnect()
-  document.documentElement.style.removeProperty('--chrome-h')
+  if (typeof document !== 'undefined') {
+    document.documentElement.style.removeProperty('--puzzle-n')
+  }
 })
 </script>
 
@@ -232,18 +208,18 @@ onBeforeUnmount(() => {
 .score { font-size: 14px; font-weight: bold; }
 
 .board-holder {
-  flex: 1 1 auto;
-  min-height: 0;
   display: flex;
-  align-items: center;
   justify-content: center;
+  padding: 0 16px; /* 16px safe margin on both sides */
   width: 100%;
-  /* Cap the visible board to whichever is smaller: viewport width or
-     available height. This keeps everything on one mobile screen. */
 }
 .board-holder :deep(.puzzle-wrap) {
-  width: min(100%, calc(100dvh - var(--chrome-h, 260px)));
-  max-width: 720px;
+  width: max(
+    calc(var(--puzzle-n, 4) * 50px),
+    min(calc(100vw - 32px), 560px)
+  );
+  max-width: none;
+  aspect-ratio: 1 / 1;
 }
 
 .items {
@@ -262,12 +238,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 .ghost-btn:hover { background: #f3f4f6; }
-
-@media (min-width: 720px) {
-  .board-holder :deep(.puzzle-wrap) {
-    width: min(100%, calc(100dvh - var(--chrome-h, 280px)), 640px);
-  }
-}
 
 @media (max-width: 480px) {
   .game { gap: 6px; }
