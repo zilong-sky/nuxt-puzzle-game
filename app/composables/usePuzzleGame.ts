@@ -1,18 +1,17 @@
-/**
+﻿/**
  * app/composables/usePuzzleGame.ts
  *
- * Puzzle game state (rectangular grid version). Owns pieces, timer, freeze,
- * item usage and completion checks. UI concerns live in PuzzleBoard.vue.
+ * Swap-only puzzle state. Every piece always occupies exactly one slot on
+ * the board; there is no tray and no empty slot. Players swap two pieces
+ * until every piece.slotIndex === piece.correctIndex.
  */
-import { computed, ref, onUnmounted } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { generateGridPieces, pickGrid, shufflePieces, type Piece } from '~/utils/puzzle'
 import { calcCountdown } from '~/utils/time'
 
 export interface PieceState extends Piece {
-  /** -1 means the piece sits in the tray; otherwise the target slot index. */
+  /** Current slot index on the board (0..N-1). Every piece has one. */
   slotIndex: number
-  /** Ordering within the tray (used to lay pieces out horizontally). */
-  trayOrder: number
 }
 
 export interface UsePuzzleOptions {
@@ -23,7 +22,6 @@ export interface UsePuzzleOptions {
 }
 
 export function usePuzzleGame(opts: UsePuzzleOptions) {
-  // Logical board size in CSS pixels (component may scale visually).
   const boardW = 720
   const boardH = 720
 
@@ -64,7 +62,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }, 1000)
   }
 
-  /** Reset: build grid, shuffle pieces into the tray, start countdown. */
   function init() {
     const grid = pickGrid(opts.pieceCount, boardW, boardH)
     cols.value = grid.cols
@@ -72,13 +69,19 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     const cw = boardW / grid.cols
     const ch = boardH / grid.rows
     const base = generateGridPieces(grid.cols, grid.rows, boardW, boardH)
-    const shuffled = shufflePieces(base)
-    pieces.value = shuffled.map((p, i) => ({
+    let indices = base.map((_, i) => i)
+    if (indices.length > 1) {
+      let tries = 0
+      do {
+        indices = shufflePieces(indices)
+        tries++
+      } while (indices.every((v, i) => v === i) && tries < 5)
+    }
+    pieces.value = base.map((p, i) => ({
       ...p,
       w: cw,
       h: ch,
-      slotIndex: -1,
-      trayOrder: i
+      slotIndex: indices[i]!
     }))
     timeLeft.value = calcCountdown(base.length)
     running.value = true
@@ -88,37 +91,17 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     startTimer()
   }
 
-  /** Place a piece into a slot; if another piece occupied it, push that back to the tray. */
-  function placePieceToSlot(id: number, targetSlot: number): boolean {
+  function swapPieces(aId: number, bId: number): boolean {
     if (!running.value) return false
-    const p = pieces.value.find((x) => x.id === id)
-    if (!p) return false
-    const occupant = pieces.value.find((x) => x.slotIndex === targetSlot && x.id !== id)
-    if (occupant) {
-      occupant.slotIndex = -1
-      occupant.trayOrder = nextTrayOrder()
-    }
-    p.slotIndex = targetSlot
-    p.trayOrder = -1
+    if (aId === bId) return false
+    const a = pieces.value.find((x) => x.id === aId)
+    const b = pieces.value.find((x) => x.id === bId)
+    if (!a || !b) return false
+    const tmp = a.slotIndex
+    a.slotIndex = b.slotIndex
+    b.slotIndex = tmp
     checkFinished()
     return true
-  }
-
-  /** Send a piece back to the tray. */
-  function returnPieceToTray(id: number) {
-    const p = pieces.value.find((x) => x.id === id)
-    if (!p) return
-    if (p.slotIndex === -1) return
-    p.slotIndex = -1
-    p.trayOrder = nextTrayOrder()
-  }
-
-  function nextTrayOrder(): number {
-    let m = -1
-    pieces.value.forEach((p) => {
-      if (p.trayOrder > m) m = p.trayOrder
-    })
-    return m + 1
   }
 
   function checkFinished() {
@@ -131,24 +114,25 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }
   }
 
-  /** Item: auto-place 3 random misplaced pieces to their correct slots. */
   function useRestore() {
     if (!running.value) return
-    const wrong = pieces.value.filter((p) => p.slotIndex !== p.correctIndex)
-    const chosen = wrong.sort(() => Math.random() - 0.5).slice(0, Math.min(3, wrong.length))
-    chosen.forEach((p) => {
-      const occupant = pieces.value.find((x) => x.slotIndex === p.correctIndex && x.id !== p.id)
-      if (occupant) {
-        occupant.slotIndex = -1
-        occupant.trayOrder = nextTrayOrder()
-      }
-      p.slotIndex = p.correctIndex
-      p.trayOrder = -1
-    })
+    const wrong = pieces.value
+      .filter((p) => p.slotIndex !== p.correctIndex)
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 3)
+    for (const p of wrong) {
+      if (p.slotIndex === p.correctIndex) continue
+      const occupant = pieces.value.find(
+        (x) => x.slotIndex === p.correctIndex && x.id !== p.id
+      )
+      if (!occupant) continue
+      const tmp = p.slotIndex
+      p.slotIndex = occupant.slotIndex
+      occupant.slotIndex = tmp
+    }
     checkFinished()
   }
 
-  /** Item: freeze the countdown for 60 seconds. */
   function useFreeze() {
     if (!running.value) return
     frozen.value = true
@@ -158,7 +142,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }, 60_000)
   }
 
-  /** Ad revive: refill countdown and keep the current board. */
   function reviveByAd() {
     if (!failed.value) return
     failed.value = false
@@ -167,19 +150,14 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     startTimer()
   }
 
-  function dispose() {
-    stopTimer()
-    if (freezeTimeoutId) clearTimeout(freezeTimeoutId)
-  }
-
-  onUnmounted(dispose)
-
   const placedCount = computed(
     () => pieces.value.filter((p) => p.slotIndex === p.correctIndex).length
   )
-  const progress = computed(() =>
-    pieces.value.length ? placedCount.value / pieces.value.length : 0
-  )
+
+  onUnmounted(() => {
+    stopTimer()
+    if (freezeTimeoutId) clearTimeout(freezeTimeoutId)
+  })
 
   return {
     boardW,
@@ -194,14 +172,11 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     finished,
     failed,
     frozen,
-    progress,
     placedCount,
     init,
-    placePieceToSlot,
-    returnPieceToTray,
+    swapPieces,
     useRestore,
     useFreeze,
-    reviveByAd,
-    dispose
+    reviveByAd
   }
 }

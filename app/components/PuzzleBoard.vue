@@ -1,44 +1,43 @@
-<!--
+﻿<!--
   app/components/PuzzleBoard.vue
-  Rectangular grid puzzle board with lifted-drag pointer interaction.
+  Swap-only rectangular grid puzzle board. All pieces always sit on the
+  board; there is no tray. Interaction modes:
 
-  - Top area is the board (boardW x boardH) with absolutely positioned .slot
-    elements to visualise empty target cells.
-  - Bottom is the .tray, horizontally scrollable, showing unplaced pieces in
-    insertion order.
-  - All .piece nodes live in a single .pieces-layer that overlaps both areas,
-    so a piece can be dragged freely from tray to board and vice versa.
-  - Dragging uses Pointer Events + requestAnimationFrame with no third-party
-    library. On pick-up the piece scales to 1.15x and gets a dark drop-shadow.
+  - Click-click: tap a piece to select (highlighted), tap another to swap;
+    tap the same piece again to deselect.
+  - Drag-drop: press and drag a piece; on release over another piece the
+    two swap; released elsewhere returns to origin.
+
+  The board scales itself to fit the viewport (mobile-first). Internal
+  coordinates use a fixed logical size (boardW x boardH); an outer wrapper
+  applies CSS scale via width so % positions naturally adapt.
 -->
 <template>
   <div class="puzzle-wrap" ref="wrapRef">
-    <div class="board" :style="{ width: boardW + 'px', height: boardH + 'px' }">
+    <div
+      class="board"
+      :style="{ aspectRatio: `${boardW} / ${boardH}` }"
+    >
       <img class="board-ghost" :src="imageUrl" alt="" draggable="false" />
       <div
         v-for="s in slots"
         :key="`slot-${s.index}`"
         class="slot"
-        :class="{ 'slot-highlight': draggingId !== null, 'slot-active': activeSlot === s.index }"
+        :class="{
+          'slot-selectable': selectedId !== null,
+          'slot-active': hoverSlot === s.index && draggingId !== null
+        }"
         :style="slotStyle(s)"
       />
-    </div>
-
-    <div
-      class="tray"
-      ref="trayRef"
-      :style="{ height: trayH + 'px' }"
-      @scroll="onTrayScroll"
-    >
-      <div class="tray-inner" :style="{ width: trayContentW + 'px', height: (trayH - 2) + 'px' }" />
-    </div>
-
-    <div class="pieces-layer" ref="layerRef">
       <div
         v-for="p in pieces"
         :key="p.id"
         class="piece"
-        :class="{ dragging: draggingId === p.id, placed: p.slotIndex === p.correctIndex }"
+        :class="{
+          dragging: draggingId === p.id,
+          selected: selectedId === p.id,
+          placed: p.slotIndex === p.correctIndex
+        }"
         :style="pieceStyle(p)"
         @pointerdown="onPointerDown($event, p.id)"
       />
@@ -60,33 +59,15 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  place: [id: number, slotIndex: number]
-  returnToTray: [id: number]
+  swap: [aId: number, bId: number]
 }>()
 
 const wrapRef = ref<HTMLElement | null>(null)
-const trayRef = ref<HTMLElement | null>(null)
-const layerRef = ref<HTMLElement | null>(null)
 
 const draggingId = ref<number | null>(null)
-const activeSlot = ref<number | null>(null)
+const selectedId = ref<number | null>(null)
+const hoverSlot = ref<number | null>(null)
 const dragPos = ref<{ x: number; y: number } | null>(null)
-const trayScrollLeft = ref(0)
-
-const trayGap = 12
-const trayPadding = 12
-
-const trayH = computed(() => {
-  const first = props.pieces[0]
-  const h = first ? first.h : 100
-  return Math.round(h + trayPadding * 2)
-})
-const trayContentW = computed(() => {
-  const trayItems = props.pieces.filter((p) => p.slotIndex === -1)
-  const first = props.pieces[0]
-  const w = first ? first.w : 100
-  return Math.max(props.boardW, trayPadding * 2 + trayItems.length * (w + trayGap))
-})
 
 const slots = computed(() => {
   const list: { index: number; row: number; col: number }[] = []
@@ -98,99 +79,87 @@ const slots = computed(() => {
   return list
 })
 
+/* Percent-based positioning so the board can scale freely. */
 function slotStyle(s: { row: number; col: number }) {
-  const first = props.pieces[0]
-  const w = first ? first.w : props.boardW / props.cols
-  const h = first ? first.h : props.boardH / props.rows
+  const wPct = 100 / props.cols
+  const hPct = 100 / props.rows
   return {
-    width: `${w}px`,
-    height: `${h}px`,
-    transform: `translate(${s.col * w}px, ${s.row * h}px)`
+    width: `${wPct}%`,
+    height: `${hPct}%`,
+    left: `${s.col * wPct}%`,
+    top: `${s.row * hPct}%`
   }
 }
 
-/** Static position of a piece (board coordinate system; tray sits below boardH). */
-function pieceBasePosition(p: PieceState): { x: number; y: number } {
-  if (p.slotIndex >= 0) {
-    const col = p.slotIndex % props.cols
-    const row = Math.floor(p.slotIndex / props.cols)
-    return { x: col * p.w, y: row * p.h }
-  }
-  const trayItems = props.pieces
-    .filter((x) => x.slotIndex === -1)
-    .slice()
-    .sort((a, b) => a.trayOrder - b.trayOrder)
-  const order = trayItems.findIndex((x) => x.id === p.id)
-  const x = trayPadding + Math.max(0, order) * (p.w + trayGap) - trayScrollLeft.value
-  const y = props.boardH + trayPadding
-  return { x, y }
+function pieceBasePosition(p: PieceState): { xPct: number; yPct: number } {
+  const col = p.slotIndex % props.cols
+  const row = Math.floor(p.slotIndex / props.cols)
+  return { xPct: col * (100 / props.cols), yPct: row * (100 / props.rows) }
 }
 
 function pieceStyle(p: PieceState): Record<string, string> {
   const isDragging = draggingId.value === p.id
-  const pos = isDragging && dragPos.value ? dragPos.value : pieceBasePosition(p)
-  const scale = isDragging ? 1.15 : 1
+  const wPct = 100 / props.cols
+  const hPct = 100 / props.rows
+  if (isDragging && dragPos.value) {
+    return {
+      width: `${wPct}%`,
+      height: `${hPct}%`,
+      left: `${dragPos.value.x}px`,
+      top: `${dragPos.value.y}px`,
+      transform: `translate(-50%, -50%) scale(1.08)`,
+      backgroundImage: `url(${props.imageUrl})`,
+      backgroundSize: `${props.cols * 100}% ${props.rows * 100}%`,
+      backgroundPosition: `${(p.col / Math.max(1, props.cols - 1)) * 100}% ${(p.row / Math.max(1, props.rows - 1)) * 100}%`
+    }
+  }
+  const base = pieceBasePosition(p)
   return {
-    width: `${p.w}px`,
-    height: `${p.h}px`,
+    width: `${wPct}%`,
+    height: `${hPct}%`,
+    left: `${base.xPct}%`,
+    top: `${base.yPct}%`,
+    transform: `translate(0, 0)`,
     backgroundImage: `url(${props.imageUrl})`,
-    backgroundSize: `${props.boardW}px ${props.boardH}px`,
-    backgroundPosition: `${-p.bgX}px ${-p.bgY}px`,
-    transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`
+    backgroundSize: `${props.cols * 100}% ${props.rows * 100}%`,
+    backgroundPosition: `${(p.col / Math.max(1, props.cols - 1)) * 100}% ${(p.row / Math.max(1, props.rows - 1)) * 100}%`
   }
 }
 
-function onTrayScroll() {
-  if (!trayRef.value) return
-  trayScrollLeft.value = trayRef.value.scrollLeft
-}
-
-/* ---------- Pointer events ---------- */
+/* ---------- Pointer events (click-or-drag) ---------- */
 interface DragState {
   id: number
   pointerId: number
-  layerRect: DOMRect
-  scale: number
+  startX: number
+  startY: number
+  boardRect: DOMRect
+  moved: boolean
   currentX: number
   currentY: number
   raf: number | null
 }
 let drag: DragState | null = null
+const CLICK_THRESHOLD = 6 // px before we treat it as a drag
 
-function getScale(): number {
-  const el = layerRef.value
-  if (!el) return 1
-  const rect = el.getBoundingClientRect()
-  return rect.width / props.boardW
-}
-
-function toLocal(clientX: number, clientY: number): { x: number; y: number } {
-  if (!drag) return { x: 0, y: 0 }
-  const rect = drag.layerRect
-  return {
-    x: (clientX - rect.left) / drag.scale,
-    y: (clientY - rect.top) / drag.scale
-  }
+function getBoardEl(): HTMLElement | null {
+  return wrapRef.value?.querySelector('.board') as HTMLElement | null
 }
 
 function onPointerDown(e: PointerEvent, id: number) {
-  const p = props.pieces.find((x) => x.id === id)
-  if (!p) return
-  const layer = layerRef.value
-  if (!layer) return
-  const scale = getScale() || 1
-  const layerRect = layer.getBoundingClientRect()
+  const boardEl = getBoardEl()
+  if (!boardEl) return
+  const rect = boardEl.getBoundingClientRect()
   drag = {
     id,
     pointerId: e.pointerId,
-    layerRect,
-    scale,
-    currentX: (e.clientX - layerRect.left) / scale,
-    currentY: (e.clientY - layerRect.top) / scale,
+    startX: e.clientX,
+    startY: e.clientY,
+    boardRect: rect,
+    moved: false,
+    currentX: e.clientX - rect.left,
+    currentY: e.clientY - rect.top,
     raf: null
   }
-  draggingId.value = id
-  updateDragPosImmediate()
   ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp)
@@ -198,71 +167,55 @@ function onPointerDown(e: PointerEvent, id: number) {
   e.preventDefault()
 }
 
-function updateDragPosImmediate() {
-  if (!drag) return
-  const p = props.pieces.find((x) => x.id === drag!.id)
-  if (!p) return
-  dragPos.value = {
-    x: drag.currentX - p.w / 2,
-    y: drag.currentY - p.h / 2
-  }
-  updateActiveSlot()
-}
-
 function scheduleUpdate() {
   if (!drag) return
   if (drag.raf != null) return
   drag.raf = requestAnimationFrame(() => {
     if (drag) drag.raf = null
-    updateDragPosImmediate()
+    if (!drag) return
+    dragPos.value = { x: drag.currentX, y: drag.currentY }
+    updateHoverSlot()
   })
+}
+
+function updateHoverSlot() {
+  if (!drag) return
+  const rect = drag.boardRect
+  const cx = drag.currentX
+  const cy = drag.currentY
+  if (cx < 0 || cy < 0 || cx > rect.width || cy > rect.height) {
+    hoverSlot.value = null
+    return
+  }
+  const col = Math.max(0, Math.min(props.cols - 1, Math.floor((cx / rect.width) * props.cols)))
+  const row = Math.max(0, Math.min(props.rows - 1, Math.floor((cy / rect.height) * props.rows)))
+  hoverSlot.value = row * props.cols + col
 }
 
 function onPointerMove(e: PointerEvent) {
   if (!drag || e.pointerId !== drag.pointerId) return
-  const local = toLocal(e.clientX, e.clientY)
-  drag.currentX = local.x
-  drag.currentY = local.y
-  scheduleUpdate()
+  const dx = e.clientX - drag.startX
+  const dy = e.clientY - drag.startY
+  if (!drag.moved && Math.hypot(dx, dy) > CLICK_THRESHOLD) {
+    drag.moved = true
+    draggingId.value = drag.id
+    // clear click-selection when a drag begins
+    selectedId.value = null
+  }
+  drag.currentX = e.clientX - drag.boardRect.left
+  drag.currentY = e.clientY - drag.boardRect.top
+  if (drag.moved) scheduleUpdate()
 }
 
-function isSlotOccupied(slotIndex: number, excludeId: number): boolean {
-  return props.pieces.some((p) => p.slotIndex === slotIndex && p.id !== excludeId)
-}
-
-function updateActiveSlot() {
-  if (!drag) return
-  const p = props.pieces.find((x) => x.id === drag!.id)
-  if (!p) return
-  const cx = drag.currentX
-  const cy = drag.currentY
-  if (cy > props.boardH || cx < 0 || cx > props.boardW || cy < 0) {
-    activeSlot.value = null
-    return
-  }
-  const col = Math.max(0, Math.min(props.cols - 1, Math.floor(cx / p.w)))
-  const row = Math.max(0, Math.min(props.rows - 1, Math.floor(cy / p.h)))
-  const idx = row * props.cols + col
-  const slotCx = col * p.w + p.w / 2
-  const slotCy = row * p.h + p.h / 2
-  const dist = Math.hypot(cx - slotCx, cy - slotCy)
-  const threshold = Math.min(p.w, p.h) * 0.5
-  if (dist <= threshold && !isSlotOccupied(idx, p.id)) {
-    activeSlot.value = idx
-  } else {
-    activeSlot.value = null
-  }
+function findPieceInSlot(slotIndex: number): PieceState | undefined {
+  return props.pieces.find((p) => p.slotIndex === slotIndex)
 }
 
 function onPointerUp(e: PointerEvent) {
   if (!drag || e.pointerId !== drag.pointerId) return
+  const wasDrag = drag.moved
   const id = drag.id
-  const target = activeSlot.value
-  const releaseInsideBoard =
-    drag.currentX >= 0 &&
-    drag.currentX <= props.boardW &&
-    drag.currentY >= 0 &&
-    drag.currentY <= props.boardH
+  const target = hoverSlot.value
   window.removeEventListener('pointermove', onPointerMove)
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerUp)
@@ -270,12 +223,24 @@ function onPointerUp(e: PointerEvent) {
   drag = null
   draggingId.value = null
   dragPos.value = null
-  activeSlot.value = null
+  hoverSlot.value = null
 
-  if (target != null) {
-    emit('place', id, target)
-  } else if (!releaseInsideBoard) {
-    emit('returnToTray', id)
+  if (wasDrag) {
+    if (target == null) return
+    const other = findPieceInSlot(target)
+    if (!other || other.id === id) return
+    emit('swap', id, other.id)
+    return
+  }
+
+  // click behaviour
+  if (selectedId.value === null) {
+    selectedId.value = id
+  } else if (selectedId.value === id) {
+    selectedId.value = null
+  } else {
+    emit('swap', selectedId.value, id)
+    selectedId.value = null
   }
 }
 
@@ -290,13 +255,12 @@ onBeforeUnmount(() => {
 .puzzle-wrap {
   position: relative;
   width: 100%;
-  max-width: 720px;
-  margin: 0 auto;
   user-select: none;
   touch-action: none;
 }
 .board {
   position: relative;
+  width: 100%;
   background: #f0f2f7;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
@@ -308,71 +272,48 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.12;
+  opacity: 0.1;
   filter: grayscale(0.4) blur(1px);
   pointer-events: none;
 }
 .slot {
   position: absolute;
-  left: 0;
-  top: 0;
-  background: rgba(0, 0, 0, 0.04);
-  border: 1px dashed transparent;
-  transition: border-color 0.15s ease, box-shadow 0.2s ease;
+  background: transparent;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
   pointer-events: none;
 }
-.slot-highlight { border-color: #d4a24c; }
+.slot-selectable { border-color: rgba(245, 196, 81, 0.5); }
 .slot-active {
   border-color: #f5c451;
-  box-shadow: 0 0 12px rgba(245, 196, 81, 0.6);
-  animation: breathe 1s ease-in-out infinite;
-}
-@keyframes breathe {
-  0%, 100% { box-shadow: 0 0 6px rgba(245, 196, 81, 0.4); }
-  50%      { box-shadow: 0 0 16px rgba(245, 196, 81, 0.8); }
-}
-
-.tray {
-  position: relative;
-  margin-top: 4px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  background: #eef1f7;
-  border-radius: var(--radius-md);
-  touch-action: pan-x;
-}
-.tray-inner { position: relative; }
-
-.pieces-layer {
-  position: absolute;
-  left: 0;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
+  box-shadow: 0 0 12px rgba(245, 196, 81, 0.7) inset;
 }
 .piece {
   position: absolute;
-  left: 0;
-  top: 0;
-  will-change: transform;
+  will-change: transform, left, top;
   cursor: grab;
   border-radius: 2px;
   transform-origin: center center;
-  transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  transition: left 0.15s ease, top 0.15s ease, transform 0.15s ease,
+    box-shadow 0.15s ease, outline-color 0.15s ease;
   background-repeat: no-repeat;
   background-color: #ccc;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  pointer-events: auto;
+}
+.piece.placed {
+  outline-color: rgba(16, 185, 129, 0.55);
+}
+.piece.selected {
+  outline-color: #f5c451;
+  box-shadow: 0 0 12px rgba(245, 196, 81, 0.8);
+  z-index: 20;
 }
 .piece.dragging {
   cursor: grabbing;
   filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.35));
   z-index: 999;
   transition: none;
-}
-.piece.placed {
-  cursor: default;
-  box-shadow: none;
 }
 </style>
