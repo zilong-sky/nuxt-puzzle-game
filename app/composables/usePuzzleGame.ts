@@ -33,13 +33,22 @@ export interface UsePuzzleOptions {
 }
 
 export function usePuzzleGame(opts: UsePuzzleOptions) {
-  const boardW = 720
-  const boardH = 720
+  /** Board pixel dimensions matching the (post-rotation) image aspect. */
+  const boardW = ref(720)
+  const boardH = ref(720)
+  /** Aspect ratio (W/H) of the post-rotation render image. */
+  const aspect = ref(1)
+  /**
+   * Render source URL. When the viewport is portrait but the image is
+   * landscape, we bake a 90deg-CW-rotated copy into a data URL so all
+   * background-mapping math stays as if the image were natively portrait.
+   */
+  const renderImageUrl = ref(opts.imageUrl)
 
   const cols = ref(4)
   const rows = ref(4)
-  const cellW = computed(() => boardW / cols.value)
-  const cellH = computed(() => boardH / rows.value)
+  const cellW = computed(() => boardW.value / cols.value)
+  const cellH = computed(() => boardH.value / rows.value)
 
   const pieces = ref<PieceState[]>([])
   const timeLeft = ref(0)
@@ -47,8 +56,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   const finished = ref(false)
   const failed = ref(false)
   const frozen = ref(false)
-  /** True if the source image is landscape and should be rendered rotated 90deg CW. */
-  const rotated = ref(false)
 
   let timerId: ReturnType<typeof setInterval> | null = null
   let freezeTimeoutId: ReturnType<typeof setTimeout> | null = null
@@ -103,7 +110,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
       const sr = Math.floor(p.slotIndex / C)
       const pc = p.correctIndex % C
       const pr = Math.floor(p.correctIndex / C)
-      // right neighbor
       if (sc < C - 1) {
         const j = slotToIdx.get(p.slotIndex + 1)
         if (j != null) {
@@ -113,7 +119,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
           if (qr === pr && qc === pc + 1) union(i, j)
         }
       }
-      // down neighbor
       if (sr < R - 1) {
         const j = slotToIdx.get(p.slotIndex + C)
         if (j != null) {
@@ -126,7 +131,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }
     const rootPieceId: number[] = new Array(N)
     for (let i = 0; i < N; i++) rootPieceId[i] = list[find(i)]!.id
-    // alignment per group
     const alignedMap = new Map<number, boolean>()
     for (let i = 0; i < N; i++) {
       const gid = rootPieceId[i]!
@@ -143,12 +147,13 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   }
 
   async function init() {
-    // Detect landscape source so the render layer can rotate 90deg CW.
-    // The source URL/file is never mutated -- rotation is presentation only.
-    rotated.value = false
+    // 1) Load image to know its natural aspect.
+    let rawW = 1
+    let rawH = 1
     if (typeof Image !== 'undefined' && opts.imageUrl) {
       try {
         const img = new Image()
+        img.crossOrigin = 'anonymous'
         img.src = opts.imageUrl
         const anyImg = img as unknown as { decode?: () => Promise<void> }
         if (typeof anyImg.decode === 'function') {
@@ -160,19 +165,58 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
           })
         }
         if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-          rotated.value = img.naturalWidth > img.naturalHeight
+          rawW = img.naturalWidth
+          rawH = img.naturalHeight
+        }
+        // 2) Portrait viewport + landscape image => rotate the image 90deg CW
+        //    by drawing it into a canvas. Everything downstream then treats
+        //    it as a natively portrait image, so background-mapping needs no
+        //    special-case code.
+        const portraitViewport =
+          typeof window !== 'undefined'
+            ? window.innerHeight >= window.innerWidth
+            : true
+        const landscapeImage = rawW > rawH
+        if (portraitViewport && landscapeImage && typeof document !== 'undefined') {
+          try {
+            const canvas = document.createElement('canvas')
+            canvas.width = rawH
+            canvas.height = rawW
+            const ctx = canvas.getContext('2d')
+            if (ctx) {
+              ctx.translate(rawH, 0)
+              ctx.rotate(Math.PI / 2)
+              ctx.drawImage(img, 0, 0)
+              renderImageUrl.value = canvas.toDataURL('image/jpeg', 0.92)
+              const tmp = rawW
+              rawW = rawH
+              rawH = tmp
+            } else {
+              renderImageUrl.value = opts.imageUrl
+            }
+          } catch {
+            renderImageUrl.value = opts.imageUrl
+          }
+        } else {
+          renderImageUrl.value = opts.imageUrl
         }
       } catch {
-        rotated.value = false
+        renderImageUrl.value = opts.imageUrl
       }
     }
-    // Board is always square; pickGrid returns cols === rows.
-    const grid = pickGrid(opts.pieceCount, boardW, boardH)
+
+    // 3) Post-rotation logical dimensions drive both the pickGrid ratio and
+    //    the internal board pixel size (used only for piece bg math).
+    boardW.value = rawW
+    boardH.value = rawH
+    aspect.value = rawW / rawH
+
+    const grid = pickGrid(opts.pieceCount, rawW, rawH)
     cols.value = grid.cols
     rows.value = grid.rows
-    const cw = boardW / grid.cols
-    const ch = boardH / grid.rows
-    const base = generateGridPieces(grid.cols, grid.rows, boardW, boardH)
+    const cw = rawW / grid.cols
+    const ch = rawH / grid.rows
+    const base = generateGridPieces(grid.cols, grid.rows, rawW, rawH)
     let indices = base.map((_, i) => i)
     if (indices.length > 1) {
       let tries = 0
@@ -198,11 +242,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     startTimer()
   }
 
-  /**
-   * Move an entire group by (dCol, dRow) cells. Returns true on success.
-   * If any destination slot would be outside the board, the move is
-   * rejected and no state changes (caller should bounce back visually).
-   */
   function moveGroup(pieceId: number, dCol: number, dRow: number): boolean {
     if (!running.value) return false
     if (dCol === 0 && dRow === 0) return false
@@ -240,11 +279,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     return true
   }
 
-  /**
-   * Convenience: move an entire group so that one of its pieces lands on
-   * the target slot (used for click-click). Delta is derived from
-   * (targetSlot - anchorPiece.slotIndex).
-   */
   function moveGroupToSlot(pieceId: number, targetSlot: number): boolean {
     const anchor = pieces.value.find((p) => p.id === pieceId)
     if (!anchor) return false
@@ -264,11 +298,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }
   }
 
-  /**
-   * Smart restore: pick up to 3 mispositioned pieces at random and swap
-   * each with the piece currently sitting on its correctIndex. May merge
-   * groups. Groups are recomputed afterwards.
-   */
   function useRestore() {
     if (!running.value) return
     const wrong = pieces.value
@@ -318,6 +347,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   return {
     boardW,
     boardH,
+    aspect,
+    renderImageUrl,
     cols,
     rows,
     cellW,
@@ -328,7 +359,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     finished,
     failed,
     frozen,
-    rotated,
     placedCount,
     init,
     moveGroup,

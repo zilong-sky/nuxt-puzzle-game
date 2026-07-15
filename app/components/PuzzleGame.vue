@@ -24,13 +24,12 @@
 
     <div class="board-holder">
       <PuzzleBoard
-        :image-url="imageUrl"
+        :image-url="renderImageUrl"
         :pieces="pieces"
         :cols="cols"
         :rows="rows"
-        :board-w="boardW"
-        :board-h="boardH"
-        :rotated="rotated"
+        :style="{ width: wrapSize.w + 'px', height: wrapSize.h + 'px' }"
+
         @move-group="onMoveGroup"
         @move-group-to-slot="onMoveGroupToSlot"
       />
@@ -76,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import PuzzleBoard from './PuzzleBoard.vue'
 import ModalDialog from './ModalDialog.vue'
 import AdModal from './AdModal.vue'
@@ -97,8 +96,8 @@ const emit = defineEmits<{ success: [score: number]; fail: []; abort: []; next: 
 const game = useGameStore()
 
 const {
-  boardW, boardH, cols, rows,
-  pieces, timeLeft, running, finished, failed, frozen, rotated,
+  cols, rows, aspect, renderImageUrl,
+  pieces, timeLeft, running, finished, failed, frozen,
   placedCount,
   init, moveGroup, moveGroupToSlot, useRestore, useFreeze, reviveByAd
 } = usePuzzleGame({
@@ -145,21 +144,40 @@ function onAdDone() {
 const hudRef = ref<HTMLElement | null>(null)
 const itemsRef = ref<HTMLElement | null>(null)
 
-// Board sizing is fully CSS-driven now. The board is always square with a
-// hard 50px min-per-cell floor, so we simply expose the grid dimension `n`
-// (cols === rows) as a CSS variable and let the media rules do the rest.
-watch(
-  () => cols.value,
-  (n) => {
-    if (typeof document !== 'undefined') {
-      document.documentElement.style.setProperty('--puzzle-n', String(n))
-    }
-  },
-  { immediate: true }
-)
+/** Tick bumped on viewport changes so wrapSize recomputes. */
+const viewportTick = ref(0)
+function onViewportChange() { viewportTick.value++ }
+
+const wrapSize = computed(() => {
+  void viewportTick.value
+  const a = aspect.value || 1
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 800
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800
+  const maxW = Math.min(vw - 32, 560)
+  const maxH = Math.min(vh - 240, 900)
+  let w = maxW
+  let h = w / a
+  if (h > maxH) {
+    h = maxH
+    w = h * a
+  }
+  const minW = Math.max(1, cols.value) * 50
+  const minH = Math.max(1, rows.value) * 50
+  w = Math.max(w, minW)
+  h = Math.max(h, minH)
+  return { w, h }
+})
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', onViewportChange)
+    window.addEventListener('orientationchange', onViewportChange)
+  }
+})
 onBeforeUnmount(() => {
-  if (typeof document !== 'undefined') {
-    document.documentElement.style.removeProperty('--puzzle-n')
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', onViewportChange)
+    window.removeEventListener('orientationchange', onViewportChange)
   }
 })
 </script>
@@ -213,14 +231,6 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 0 16px; /* 16px safe margin on both sides */
   width: 100%;
-}
-.board-holder :deep(.puzzle-wrap) {
-  width: max(
-    calc(var(--puzzle-n, 4) * 50px),
-    min(calc(100vw - 32px), calc(100dvh - 240px), 560px)
-  );
-  max-width: none;
-  aspect-ratio: 1 / 1;
 }
 
 .items {

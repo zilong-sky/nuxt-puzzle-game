@@ -1,4 +1,4 @@
-/**
+﻿/**
  * app/utils/puzzle.ts - Rectangular grid slicing utilities.
  *
  * The image is cut into cols x rows equal rectangular cells. Each piece is
@@ -24,21 +24,31 @@ export interface Piece {
 }
 
 /**
- * Pick a square grid (cols === rows) with total block count near the
- * requested target. Rotation is handled in usePuzzleGame, so the aspect
- * arguments are ignored (kept only for source-compat). Formula:
- *   n = clamp( round(sqrt(target)), 2, floor(sqrt(target * 1.2)) ).
+ * Pick a cols x rows grid whose aspect ratio (cols/rows) approximates the
+ * (post-rotation) image aspect imgW/imgH, and whose total block count is
+ * near the requested target. Prefers grids whose individual cells are
+ * close to square, with a small penalty for deviating from the target
+ * count.
  */
 export function pickGrid(
   blocks: number,
-  _imgW: number = 1,
-  _imgH: number = 1
+  imgW: number = 1,
+  imgH: number = 1
 ): { rows: number; cols: number } {
   const target = Math.max(4, Math.floor(blocks))
-  const raw = Math.round(Math.sqrt(target))
-  const upper = Math.max(2, Math.floor(Math.sqrt(target * 1.2)))
-  const n = Math.max(2, Math.min(raw, upper))
-  return { rows: n, cols: n }
+  const ratio = imgW / imgH
+  let best = { cols: 2, rows: 2, score: Infinity }
+  for (let c = 2; c <= 20; c++) {
+    const r = Math.max(2, Math.round(c / ratio))
+    const total = c * r
+    if (total < target * 0.75 || total > target * 1.3) continue
+    const cellRatio = (imgW / c) / (imgH / r)
+    const cellScore = Math.abs(Math.log(cellRatio))
+    const countScore = Math.abs(total - target) / target
+    const s = cellScore + countScore * 0.5
+    if (s < best.score) best = { cols: c, rows: r, score: s }
+  }
+  return { rows: best.rows, cols: best.cols }
 }
 
 /**
