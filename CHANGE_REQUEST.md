@@ -1,110 +1,97 @@
-# 自拍模式：上次选择的图片本地缓存
+# 两处调整
 
-## 目标
-用户上次在自拍模式选好的照片（相机拍的 + 相册选的），下次再进这个页面时自动回显在预览区，不用重新挑；同时能一键清空。
+## 一、休闲模式难度上限改成 50
 
-## 存储方案
+改 `app/pages/play/casual.vue`：
+```html
+<DifficultyModal
+  :open="!pieceCountChosen"
+  :min="4" :max="50" :initial="25"
+  ...
+/>
+```
+（把原来的 `:max="200"` 改 `:max="50"`；`:initial="48"` 改成 `:initial="25"`，让默认落在合理位置。）
 
-- 存储：`localStorage`，key = `puzzle-selfie-images-v1`
-- 内容：dataURL 数组 JSON。因为 localStorage 单域上限 ~5MB，需要保守限流：
-  - 单张 dataURL 超过 1.5MB 时跳过（相机拍的通常 100-500KB，相册选的可能 2-4MB 需要压缩后再存，先简单跳过）。
-  - 累加超过 4MB 时截断，仅保留能塞下的前 N 张。
-  - 若第一张就超，`try { localStorage.setItem(...) } catch { console.warn; 清空 }`。
-- 触发时机：
-  - `onMounted`：读取，赋值给 `images.value`，并调用 `measureImage` 测最后一张。
-  - `watch(images, ..., { deep: false })`：数组变化时写回。（Vue3 ref 数组本身 push/splice 是浅层触发，deep:false 够用）
+## 二、整组一起拖动（可视 + 松手交换）
 
-## 修改（`app/pages/play/selfie.vue`）
+### 现状
+- `recomputeGroups()` 已经把相邻且相对位置正确的块合并成同一个 `groupId`。
+- 内部无缝：`neighborInsets` 已经在组内边把 border-color 置 transparent、去掉 box-shadow —— 这部分**不用改**。
+- `computeGroupMoveInto` 已经把整组当作一个整体做碰撞/交换判定，松手时 `emit('moveGroup')` 也是整组移动。
+- 唯一缺失：**拖动过程中的可视 offset** 只写在 `drag.dragEl`（当前被按的那一块）上，其他组成员不动，视觉上组"散开"。
 
-### 1. 顶部导入 & 常量
+### 修改（`app/components/PuzzleBoard.vue`）
 
+#### 1. 在 `DragState` 里加成员 DOM 引用
 ```ts
-const CACHE_KEY = 'puzzle-selfie-images-v1'
-const MAX_BYTES = 4 * 1024 * 1024   // 4MB
-const PER_ITEM_MAX_BYTES = 1.5 * 1024 * 1024
+interface DragState {
+  ...
+  members: PieceState[]
+  memberEls: HTMLElement[]       // 新增
+  dragEl: HTMLElement | null
+  ...
+}
 ```
 
-### 2. onMounted 里加载
+#### 2. `onPointerDown` 里收集 memberEls
 
+在计算 `drag = { ... }` 后：
 ```ts
-onMounted(() => {
-  // ... 现有 resize/orientationchange 监听保留
-  try {
-    const raw = localStorage.getItem(CACHE_KEY)
-    if (raw) {
-      const arr = JSON.parse(raw)
-      if (Array.isArray(arr) && arr.every((x) => typeof x === 'string' && x.startsWith('data:'))) {
-        images.value = arr
-        // 测最后一张，让 maxPieces 立刻正确
-        if (arr.length > 0) measureImage(arr[arr.length - 1])
-      }
-    }
-  } catch { /* ignore */ }
-})
-```
-
-### 3. 写回
-
-```ts
-function persistImages() {
-  try {
-    let total = 0
-    const kept: string[] = []
-    for (const url of images.value) {
-      const size = url.length // 近似字节数（base64 每 4 字符 ≈ 3 字节，做保守估算按字符数）
-      if (size > PER_ITEM_MAX_BYTES) continue
-      if (total + size > MAX_BYTES) break
-      kept.push(url)
-      total += size
-    }
-    localStorage.setItem(CACHE_KEY, JSON.stringify(kept))
-  } catch {
-    // 配额溢出：清掉旧的，再试写空
-    try { localStorage.removeItem(CACHE_KEY) } catch {}
+const boardEl = /* 原有 */
+const memberEls: HTMLElement[] = []
+if (boardEl) {
+  for (const m of drag.members) {
+    const el = boardEl.querySelector<HTMLElement>(`[data-piece-id="${m.id}"]`)
+    if (el) memberEls.push(el)
   }
 }
-
-watch(images, () => persistImages(), { deep: false })
+drag.memberEls = memberEls
 ```
+（如果 piece 元素上没有 `data-piece-id`，那就在模板里给 `.piece` 加 `:data-piece-id="p.id"`。）
 
-（`images` 是 `ref<string[]>`，`push/splice` 会触发 watch。）
-
-### 4. UI 提示 + 清空按钮
-
-在 `<div class="preview" v-if="images.length">` 下方（保留 preview 网格）新增一行：
-
-```html
-<div v-if="images.length" class="preview-actions">
-  <span class="preview-note">已保存 {{ images.length }} 张，下次进入自动回显</span>
-  <button class="ghost-btn small" @click="clearImages">清空</button>
-</div>
-```
-
+**给每个成员元素加 `dragging` class** 而不是只加在 dragEl：
 ```ts
-function clearImages() {
-  images.value = []
-  imgDim.value = null
-  try { localStorage.removeItem(CACHE_KEY) } catch {}
+for (const el of memberEls) el.classList.add('dragging')
+```
+（也保留原来在 dragEl 上加 dragging 的语义。用循环覆盖即可，不要重复加。）
+
+#### 3. `onPointerMove` 同步给所有成员写 CSS 变量
+
+替换现有的：
+```ts
+pieceEl.style.setProperty('--drag-dx', dx + 'px')
+pieceEl.style.setProperty('--drag-dy', dy + 'px')
+```
+为：
+```ts
+for (const el of drag.memberEls) {
+  el.style.setProperty('--drag-dx', dx + 'px')
+  el.style.setProperty('--drag-dy', dy + 'px')
 }
 ```
 
-样式追加：
-```css
-.preview-actions {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-top: 4px;
+#### 4. `onPointerUp` 归位
+
+原来只清 dragEl，改成遍历 memberEls：
+```ts
+for (const el of drag.memberEls) {
+  el.classList.remove('dragging')
+  el.style.setProperty('--drag-dx', '0px')
+  el.style.setProperty('--drag-dy', '0px')
 }
-.preview-note { font-size: 12px; color: var(--color-text-soft); }
-.ghost-btn.small { padding: 4px 10px; font-size: 12px; flex: 0 0 auto; }
 ```
+保留原有的 clearHoverTargets / boardEl 去 is-dragging / 摘监听 / drag=null / emit 顺序。
 
-### 5. 通关/放弃时不清空
+#### 5. z-index 保证整组浮起
 
-不动 `onSuccess/onFail/onAbort/onNext` 的现有逻辑。用户想清就点"清空"按钮。
+`.piece.dragging` 已有 `z-index` / `transform: translate3d(...) scale(1.05)`。为了整组一起浮起来但不互相遮，保持 scale(1.05) 只用一次没问题（每块单独 scale，视觉上组整体略放大也合理）。若组太大导致边缘视觉出格，可以把 scale 改成 1.02 —— **本次先不改 scale**，观察后再定。
+
+#### 6. 小心 `.piece` 上的 CSS transition
+`.piece { transition: left/top 0.12s ...; }` 里没有 transform，OK。`--drag-dx/dy` 变化不会有 transition。松手归零瞬间跳回也不会飘。
 
 ## 交付
 
 1. `npm run build` 通过。
-2. `git add -A && git commit -m "feat(selfie): cache last picked images in localStorage"`。
+2. `git add -A && git commit -m "feat(casual): max 50; feat(drag): whole group follows finger"`。
 3. `git push origin master`（失败重试一次）。
 4. 全程自主完成，不要询问。

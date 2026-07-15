@@ -1,4 +1,4 @@
-﻿<!--
+<!--
   app/components/PuzzleBoard.vue
   Group-aware swap board. Pieces are grouped when they are neighbors in
   both the current slot layout and the correct layout. A drag or a
@@ -30,6 +30,7 @@
           'group-aligned': p.groupAligned
         }"
         :style="pieceStyle(p)"
+        :data-piece-id="p.id"
         @pointerdown="onPointerDown($event, p.id)"
       >
         <div class="piece-fill" :style="fillStyle(p)" />
@@ -162,6 +163,7 @@ interface DragState {
   curDx: number
   curDy: number
   members: PieceState[]
+  memberEls: HTMLElement[]
   lastDCol: number
   lastDRow: number
   dragEl: HTMLElement | null
@@ -244,8 +246,15 @@ function onPointerDown(e: PointerEvent, id: number) {
     lastDRow: -9999,
     dragEl: e.currentTarget as HTMLElement,
     activeSlotEls: new Set<HTMLElement>(),
-    scratchTargets: new Set<number>()
+    scratchTargets: new Set<number>(),
+    memberEls: []
   }
+  const memberEls: HTMLElement[] = []
+  for (const m of drag.members) {
+    const el = boardEl.querySelector<HTMLElement>(`[data-piece-id="${m.id}"]`)
+    if (el) memberEls.push(el)
+  }
+  drag.memberEls = memberEls
   ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp)
@@ -267,15 +276,14 @@ function onPointerMove(e: PointerEvent) {
     selectedGroupId.value = null
     const boardEl = getBoardEl()
     if (boardEl) boardEl.classList.add('is-dragging')
-    if (drag.dragEl) drag.dragEl.classList.add('dragging')
+    for (const el of drag.memberEls) el.classList.add('dragging')
   }
   drag.curDx = dx
   drag.curDy = dy
   if (!drag.moved) return
-  const pieceEl = drag.dragEl
-  if (pieceEl) {
-    pieceEl.style.setProperty('--drag-dx', dx + 'px')
-    pieceEl.style.setProperty('--drag-dy', dy + 'px')
+  for (const el of drag.memberEls) {
+    el.style.setProperty('--drag-dx', dx + 'px')
+    el.style.setProperty('--drag-dy', dy + 'px')
   }
   const cellW = drag.boardRect.width / props.cols
   const cellH = drag.boardRect.height / props.rows
@@ -307,12 +315,11 @@ function onPointerUp(e: PointerEvent) {
   //    transition-suppressing `dragging` class is removed in the same
   //    frame, so by the time Vue flushes the state change there is no
   //    leftover visual to catch up on.
-  const dragEl = drag.dragEl
   const boardEl = getBoardEl()
-  if (dragEl) {
-    dragEl.classList.remove('dragging')
-    dragEl.style.setProperty('--drag-dx', '0px')
-    dragEl.style.setProperty('--drag-dy', '0px')
+  for (const el of drag.memberEls) {
+    el.classList.remove('dragging')
+    el.style.setProperty('--drag-dx', '0px')
+    el.style.setProperty('--drag-dy', '0px')
   }
   if (boardEl) boardEl.classList.remove('is-dragging')
   clearHoverTargets()
