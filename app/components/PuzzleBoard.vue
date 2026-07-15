@@ -171,12 +171,12 @@ interface DragState {
   startY: number
   boardRect: DOMRect
   moved: boolean
-  raf: number | null
   curDx: number
   curDy: number
   members: PieceState[]
   lastDCol: number
   lastDRow: number
+  dragEl: HTMLElement | null
 }
 let drag: DragState | null = null
 const CLICK_THRESHOLD = 6
@@ -224,12 +224,12 @@ function onPointerDown(e: PointerEvent, id: number) {
     startY: e.clientY,
     boardRect: rect,
     moved: false,
-    raf: null,
     curDx: 0,
     curDy: 0,
     members: props.pieces.filter((pp) => pp.groupId === piece.groupId),
     lastDCol: -9999,
-    lastDRow: -9999
+    lastDRow: -9999,
+    dragEl: e.currentTarget as HTMLElement
   }
   ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   window.addEventListener('pointermove', onPointerMove)
@@ -238,34 +238,15 @@ function onPointerDown(e: PointerEvent, id: number) {
   e.preventDefault()
 }
 
-function scheduleUpdate() {
-  if (!drag) return
-  if (drag.raf != null) return
-  drag.raf = requestAnimationFrame(() => {
-    if (!drag) return
-    drag.raf = null
-    const boardEl = getBoardEl()
-    if (boardEl) {
-      boardEl.style.setProperty('--drag-dx', drag.curDx + 'px')
-      boardEl.style.setProperty('--drag-dy', drag.curDy + 'px')
-    }
-    const cellW = drag.boardRect.width / props.cols
-    const cellH = drag.boardRect.height / props.rows
-    const dCol = Math.round(drag.curDx / cellW)
-    const dRow = Math.round(drag.curDy / cellH)
-    if (dCol === drag.lastDCol && dRow === drag.lastDRow) return
-    drag.lastDCol = dCol
-    drag.lastDRow = dRow
-    const { legal, targets } = computeGroupMove(drag.pieceId, dCol, dRow)
-    dragLegal.value = legal && (dCol !== 0 || dRow !== 0)
-    hoverTargets.value = legal ? targets : new Set()
-  })
-}
 
 function onPointerMove(e: PointerEvent) {
   if (!drag || e.pointerId !== drag.pointerId) return
-  const dx = e.clientX - drag.startX
-  const dy = e.clientY - drag.startY
+  const events = (typeof e.getCoalescedEvents === 'function')
+    ? e.getCoalescedEvents()
+    : []
+  const last = (events && events.length > 0) ? events[events.length - 1] : e
+  const dx = last.clientX - drag.startX
+  const dy = last.clientY - drag.startY
   if (!drag.moved && Math.hypot(dx, dy) > CLICK_THRESHOLD) {
     drag.moved = true
     draggingGroupId.value = drag.groupId
@@ -273,7 +254,23 @@ function onPointerMove(e: PointerEvent) {
   }
   drag.curDx = dx
   drag.curDy = dy
-  if (drag.moved) scheduleUpdate()
+  if (!drag.moved) return
+  const pieceEl = drag.dragEl
+  if (pieceEl) {
+    pieceEl.style.setProperty('--drag-dx', dx + 'px')
+    pieceEl.style.setProperty('--drag-dy', dy + 'px')
+  }
+  const cellW = drag.boardRect.width / props.cols
+  const cellH = drag.boardRect.height / props.rows
+  const dCol = Math.round(dx / cellW)
+  const dRow = Math.round(dy / cellH)
+  if (dCol !== drag.lastDCol || dRow !== drag.lastDRow) {
+    drag.lastDCol = dCol
+    drag.lastDRow = dRow
+    const { legal, targets } = computeGroupMove(drag.pieceId, dCol, dRow)
+    dragLegal.value = legal && (dCol !== 0 || dRow !== 0)
+    hoverTargets.value = legal ? targets : new Set()
+  }
 }
 
 function onPointerUp(e: PointerEvent) {
@@ -287,11 +284,10 @@ function onPointerUp(e: PointerEvent) {
   window.removeEventListener('pointermove', onPointerMove)
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerUp)
-  if (drag.raf != null) cancelAnimationFrame(drag.raf)
-  const boardElUp = getBoardEl()
-  if (boardElUp) {
-    boardElUp.style.setProperty('--drag-dx', '0px')
-    boardElUp.style.setProperty('--drag-dy', '0px')
+  const pieceElUp = drag.dragEl
+  if (pieceElUp) {
+    pieceElUp.style.setProperty('--drag-dx', '0px')
+    pieceElUp.style.setProperty('--drag-dy', '0px')
   }
   drag = null
   draggingGroupId.value = null
@@ -344,8 +340,6 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
-  --drag-dx: 0px;
-  --drag-dy: 0px;
 }
 .board.is-dragging .piece:not(.dragging) {
   transition: none;
@@ -374,15 +368,19 @@ onBeforeUnmount(() => {
   position: absolute;
   cursor: grab;
   transform-origin: center center;
-  transition: left 0.15s ease, top 0.15s ease, transform 0.2s ease;
+  transition: left 0.15s ease, top 0.15s ease;
   will-change: transform, left, top;
 }
 .piece.dragging {
   cursor: grabbing;
   transition: none;
-  transform: translate3d(var(--drag-dx), var(--drag-dy), 0) scale(1.05);
+  transform: translate3d(var(--drag-dx, 0), var(--drag-dy, 0), 0) scale(1.05);
   z-index: 999;
-  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.35));
+}
+.piece.dragging .piece-fill {
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.15),
+    0 8px 18px rgba(0, 0, 0, 0.35) !important;
 }
 .piece-fill {
   position: absolute;
