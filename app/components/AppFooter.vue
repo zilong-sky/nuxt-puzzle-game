@@ -15,14 +15,14 @@ const year = new Date().getFullYear()
 .app-footer {
   border-top: 1px solid var(--color-border);
   background: #ffffff;
-  margin-top: 40px;
+  margin-top: 0;
 }
 .inner {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 14px 16px;
+  padding: 8px 16px;
   color: var(--color-text-soft);
-  font-size: 13px;
+  font-size: 12px;
   text-align: center;
 }
 </style>

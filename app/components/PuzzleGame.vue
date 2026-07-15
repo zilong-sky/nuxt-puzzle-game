@@ -1,4 +1,4 @@
-﻿<!--
+<!--
   app/components/PuzzleGame.vue
   Mobile-first swap-only puzzle wrapper. Owns HUD, item bar, success/fail
   dialogs and the ad revive flow. The board is sized by CSS so it fills the
@@ -6,7 +6,7 @@
 -->
 <template>
   <div class="game">
-    <div class="hud card">
+    <div class="hud card" ref="hudRef">
       <div class="left">
         <div class="mode-tag">{{ modeLabel }}</div>
         <div class="time" :class="{ danger: timeLeft <= 10, freeze: frozen }">
@@ -35,7 +35,7 @@
       />
     </div>
 
-    <div class="items card">
+    <div class="items card" ref="itemsRef">
       <button
         class="item-btn"
         :disabled="!running || game.items.restore <= 0"
@@ -75,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, nextTick, ref, watch } from 'vue'
 import PuzzleBoard from './PuzzleBoard.vue'
 import ModalDialog from './ModalDialog.vue'
 import AdModal from './AdModal.vue'
@@ -139,6 +139,53 @@ function onAdDone() {
   adVisible.value = false
   reviveByAd()
 }
+
+
+const hudRef = ref<HTMLElement | null>(null)
+const itemsRef = ref<HTMLElement | null>(null)
+
+function measureChrome() {
+  if (typeof window === 'undefined') return
+  const header = document.querySelector('.app-header') as HTMLElement | null
+  const footer = document.querySelector('.app-footer') as HTMLElement | null
+  const main = document.querySelector('.main-content') as HTMLElement | null
+  const hudH = hudRef.value?.getBoundingClientRect().height ?? 0
+  const itemsH = itemsRef.value?.getBoundingClientRect().height ?? 0
+  const headerH = header?.getBoundingClientRect().height ?? 0
+  const footerH = footer?.getBoundingClientRect().height ?? 0
+  let padY = 0
+  if (main) {
+    const cs = getComputedStyle(main)
+    padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+  }
+  const gaps = 16
+  const total = Math.ceil(headerH + footerH + hudH + itemsH + padY + gaps)
+  document.documentElement.style.setProperty('--chrome-h', total + 'px')
+}
+
+let ro: ResizeObserver | null = null
+onMounted(() => {
+  nextTick(() => {
+    measureChrome()
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => measureChrome())
+      if (hudRef.value) ro.observe(hudRef.value)
+      if (itemsRef.value) ro.observe(itemsRef.value)
+      const header = document.querySelector('.app-header')
+      const footer = document.querySelector('.app-footer')
+      if (header) ro.observe(header)
+      if (footer) ro.observe(footer)
+    }
+    window.addEventListener('resize', measureChrome)
+    window.addEventListener('orientationchange', measureChrome)
+  })
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', measureChrome)
+  window.removeEventListener('orientationchange', measureChrome)
+  ro?.disconnect()
+  document.documentElement.style.removeProperty('--chrome-h')
+})
 </script>
 
 <style scoped>
@@ -147,6 +194,8 @@ function onAdDone() {
   flex-direction: column;
   gap: 8px;
   width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
 }
 .hud {
   display: flex;
@@ -193,7 +242,7 @@ function onAdDone() {
      available height. This keeps everything on one mobile screen. */
 }
 .board-holder :deep(.puzzle-wrap) {
-  width: min(100%, calc(100dvh - 220px));
+  width: min(100%, calc(100dvh - var(--chrome-h, 260px)));
   max-width: 720px;
 }
 
@@ -216,8 +265,17 @@ function onAdDone() {
 
 @media (min-width: 720px) {
   .board-holder :deep(.puzzle-wrap) {
-    width: min(100%, calc(100dvh - 240px), 640px);
+    width: min(100%, calc(100dvh - var(--chrome-h, 280px)), 640px);
   }
+}
+
+@media (max-width: 480px) {
+  .game { gap: 6px; }
+  .hud { padding: 6px 10px; gap: 6px; }
+  .hud .time { font-size: 16px; }
+  .hud .mode-tag { font-size: 11px; }
+  .items { padding: 6px 8px; gap: 6px; }
+  .item-btn, .ghost-btn { font-size: 12px; padding: 6px 8px; }
 }
 </style>
 

@@ -22,7 +22,7 @@
 .inner {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 10px 16px;
+  padding: 6px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
