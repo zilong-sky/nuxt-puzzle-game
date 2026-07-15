@@ -24,12 +24,12 @@
     <PuzzleBoard
       :image-url="imageUrl"
       :pieces="pieces"
-      :view-w="viewW"
-      :view-h="viewH"
-      :tray-w="trayW"
-      :total-w="totalW"
-      @move="onMove"
-      @drop="onDrop"
+      :cols="cols"
+      :rows="rows"
+      :board-w="boardW"
+      :board-h="boardH"
+      @place="onPlace"
+      @return-to-tray="onReturnToTray"
     />
 
     <div class="items card">
@@ -98,10 +98,10 @@ const emit = defineEmits<{ success: [score: number]; fail: []; abort: []; next: 
 const game = useGameStore()
 
 const {
-  viewW, viewH, trayW, totalW,
+  boardW, boardH, cols, rows,
   pieces, timeLeft, running, finished, failed, frozen,
   placedCount,
-  init, movePiece, tryDrop, useRestore, useFreeze, reviveByAd
+  init, placePieceToSlot, returnPieceToTray, useRestore, useFreeze, reviveByAd
 } = usePuzzleGame({
   imageUrl: props.imageUrl,
   pieceCount: props.pieceCount,
@@ -122,11 +122,11 @@ watch(
   () => init()
 )
 
-function onMove(id: number, x: number, y: number) {
-  movePiece(id, x, y)
+function onPlace(id: number, slotIndex: number) {
+  placePieceToSlot(id, slotIndex)
 }
-function onDrop(id: number) {
-  tryDrop(id)
+function onReturnToTray(id: number) {
+  returnPieceToTray(id)
 }
 function doRestore() {
   if (game.useItem('restore')) useRestore()

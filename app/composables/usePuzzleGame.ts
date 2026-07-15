@@ -1,25 +1,18 @@
 /**
  * app/composables/usePuzzleGame.ts
- * 拼图游戏核心状态机 hook。
- * 负责：初始化布局、跟踪块位置、判定拼合、倒计时、道具触发。
+ *
+ * Puzzle game state (rectangular grid version). Owns pieces, timer, freeze,
+ * item usage and completion checks. UI concerns live in PuzzleBoard.vue.
  */
-
 import { computed, ref, onUnmounted } from 'vue'
-import {
-  generatePuzzleLayout,
-  pickGrid,
-  shufflePieces,
-  type PuzzlePiece,
-  type PuzzleLayout
-} from '~/utils/puzzle'
+import { generateGridPieces, pickGrid, shufflePieces, type Piece } from '~/utils/puzzle'
 import { calcCountdown } from '~/utils/time'
-import { randInt } from '~/utils/random'
 
-export interface PieceState extends PuzzlePiece {
-  /** 当前位置（画布坐标，SVG viewBox 内） */
-  x: number
-  y: number
-  placed: boolean
+export interface PieceState extends Piece {
+  /** -1 means the piece sits in the tray; otherwise the target slot index. */
+  slotIndex: number
+  /** Ordering within the tray (used to lay pieces out horizontally). */
+  trayOrder: number
 }
 
 export interface UsePuzzleOptions {
@@ -30,12 +23,15 @@ export interface UsePuzzleOptions {
 }
 
 export function usePuzzleGame(opts: UsePuzzleOptions) {
-  const viewW = 800
-  const viewH = 800
-  const trayW = 300 // 右侧料架宽度
-  const totalW = viewW + trayW
+  // Logical board size in CSS pixels (component may scale visually).
+  const boardW = 720
+  const boardH = 720
 
-  const layout = ref<PuzzleLayout | null>(null)
+  const cols = ref(4)
+  const rows = ref(4)
+  const cellW = computed(() => boardW / cols.value)
+  const cellH = computed(() => boardH / rows.value)
+
   const pieces = ref<PieceState[]>([])
   const timeLeft = ref(0)
   const running = ref(false)
@@ -68,29 +64,23 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }, 1000)
   }
 
-  /** 初始化：生成布局，打乱块位置放到右侧料架 */
+  /** Reset: build grid, shuffle pieces into the tray, start countdown. */
   function init() {
-    const { rows, cols } = pickGrid(opts.pieceCount)
-    const l = generatePuzzleLayout(viewW, viewH, rows, cols)
-    layout.value = l
-    const shuffled = shufflePieces(l.pieces)
-    pieces.value = shuffled.map((p, idx) => {
-      // 将块随机散布在右侧料架内
-      const perRow = 3
-      const col = idx % perRow
-      const row = Math.floor(idx / perRow)
-      const gridW = trayW / perRow
-      const gridH = gridW
-      const x = viewW + col * gridW + randInt(-8, 8)
-      const y = row * gridH + randInt(-8, 8)
-      return {
-        ...p,
-        x,
-        y,
-        placed: false
-      }
-    })
-    timeLeft.value = calcCountdown(opts.pieceCount)
+    const grid = pickGrid(opts.pieceCount, boardW, boardH)
+    cols.value = grid.cols
+    rows.value = grid.rows
+    const cw = boardW / grid.cols
+    const ch = boardH / grid.rows
+    const base = generateGridPieces(grid.cols, grid.rows, boardW, boardH)
+    const shuffled = shufflePieces(base)
+    pieces.value = shuffled.map((p, i) => ({
+      ...p,
+      w: cw,
+      h: ch,
+      slotIndex: -1,
+      trayOrder: i
+    }))
+    timeLeft.value = calcCountdown(base.length)
     running.value = true
     finished.value = false
     failed.value = false
@@ -98,35 +88,42 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     startTimer()
   }
 
-  /** 拖拽某块到 (x, y) - 传入的是 svg 坐标 */
-  function movePiece(id: number, x: number, y: number) {
-    if (!running.value) return
-    const p = pieces.value.find((it) => it.id === id)
-    if (!p || p.placed) return
-    p.x = x
-    p.y = y
+  /** Place a piece into a slot; if another piece occupied it, push that back to the tray. */
+  function placePieceToSlot(id: number, targetSlot: number): boolean {
+    if (!running.value) return false
+    const p = pieces.value.find((x) => x.id === id)
+    if (!p) return false
+    const occupant = pieces.value.find((x) => x.slotIndex === targetSlot && x.id !== id)
+    if (occupant) {
+      occupant.slotIndex = -1
+      occupant.trayOrder = nextTrayOrder()
+    }
+    p.slotIndex = targetSlot
+    p.trayOrder = -1
+    checkFinished()
+    return true
   }
 
-  /** 松手时检测是否吸附到正确位置 */
-  function tryDrop(id: number) {
-    const p = pieces.value.find((it) => it.id === id)
-    if (!p || p.placed) return false
-    const dx = p.x - p.targetX
-    const dy = p.y - p.targetY
-    const dist = Math.hypot(dx, dy)
-    const threshold = 30 // svg 坐标下的吸附阈值
-    if (dist < threshold) {
-      p.x = p.targetX
-      p.y = p.targetY
-      p.placed = true
-      checkFinished()
-      return true
-    }
-    return false
+  /** Send a piece back to the tray. */
+  function returnPieceToTray(id: number) {
+    const p = pieces.value.find((x) => x.id === id)
+    if (!p) return
+    if (p.slotIndex === -1) return
+    p.slotIndex = -1
+    p.trayOrder = nextTrayOrder()
+  }
+
+  function nextTrayOrder(): number {
+    let m = -1
+    pieces.value.forEach((p) => {
+      if (p.trayOrder > m) m = p.trayOrder
+    })
+    return m + 1
   }
 
   function checkFinished() {
-    if (pieces.value.every((p) => p.placed)) {
+    const ok = pieces.value.every((p) => p.slotIndex === p.correctIndex)
+    if (ok) {
       running.value = false
       finished.value = true
       stopTimer()
@@ -134,22 +131,24 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }
   }
 
-  /** 道具：智能还原 - 自动摆正 3 块错位拼图碎片 */
+  /** Item: auto-place 3 random misplaced pieces to their correct slots. */
   function useRestore() {
     if (!running.value) return
-    const unplaced = pieces.value.filter((p) => !p.placed)
-    const count = Math.min(3, unplaced.length)
-    // 打乱后取前 count 个
-    const chosen = unplaced.sort(() => Math.random() - 0.5).slice(0, count)
+    const wrong = pieces.value.filter((p) => p.slotIndex !== p.correctIndex)
+    const chosen = wrong.sort(() => Math.random() - 0.5).slice(0, Math.min(3, wrong.length))
     chosen.forEach((p) => {
-      p.x = p.targetX
-      p.y = p.targetY
-      p.placed = true
+      const occupant = pieces.value.find((x) => x.slotIndex === p.correctIndex && x.id !== p.id)
+      if (occupant) {
+        occupant.slotIndex = -1
+        occupant.trayOrder = nextTrayOrder()
+      }
+      p.slotIndex = p.correctIndex
+      p.trayOrder = -1
     })
     checkFinished()
   }
 
-  /** 道具：时间冻结 60 秒 */
+  /** Item: freeze the countdown for 60 seconds. */
   function useFreeze() {
     if (!running.value) return
     frozen.value = true
@@ -159,16 +158,15 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }, 60_000)
   }
 
-  /** 广告复活：时间全额重置，继续当前拼图 */
+  /** Ad revive: refill countdown and keep the current board. */
   function reviveByAd() {
     if (!failed.value) return
     failed.value = false
     running.value = true
-    timeLeft.value = calcCountdown(opts.pieceCount)
+    timeLeft.value = calcCountdown(pieces.value.length)
     startTimer()
   }
 
-  /** 手动结束当前局（页面离开时调用） */
   function dispose() {
     stopTimer()
     if (freezeTimeoutId) clearTimeout(freezeTimeoutId)
@@ -176,18 +174,20 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
 
   onUnmounted(dispose)
 
-  const progress = computed(() => {
-    if (!pieces.value.length) return 0
-    return pieces.value.filter((p) => p.placed).length / pieces.value.length
-  })
-  const placedCount = computed(() => pieces.value.filter((p) => p.placed).length)
+  const placedCount = computed(
+    () => pieces.value.filter((p) => p.slotIndex === p.correctIndex).length
+  )
+  const progress = computed(() =>
+    pieces.value.length ? placedCount.value / pieces.value.length : 0
+  )
 
   return {
-    viewW,
-    viewH,
-    trayW,
-    totalW,
-    layout,
+    boardW,
+    boardH,
+    cols,
+    rows,
+    cellW,
+    cellH,
     pieces,
     timeLeft,
     running,
@@ -197,8 +197,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     progress,
     placedCount,
     init,
-    movePiece,
-    tryDrop,
+    placePieceToSlot,
+    returnPieceToTray,
     useRestore,
     useFreeze,
     reviveByAd,
