@@ -16,6 +16,8 @@ import { computed, onUnmounted, ref } from 'vue'
 import { generateGridPieces, pickGrid, shufflePieces, type Piece } from '~/utils/puzzle'
 import { calcCountdown } from '~/utils/time'
 
+let lastObjectUrl: string | null = null
+
 export interface PieceState extends Piece {
   /** Current slot index on the board (0..N-1). */
   slotIndex: number
@@ -56,6 +58,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   const finished = ref(false)
   const failed = ref(false)
   const frozen = ref(false)
+  const loading = ref(true)
+  const loadProgress = ref(0)
 
   let timerId: ReturnType<typeof setInterval> | null = null
   let freezeTimeoutId: ReturnType<typeof setTimeout> | null = null
@@ -147,14 +151,68 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   }
 
   async function init() {
+    loading.value = true
+    loadProgress.value = 0
+
+    if (lastObjectUrl) {
+      try { URL.revokeObjectURL(lastObjectUrl) } catch { /* noop */ }
+      lastObjectUrl = null
+    }
+
     // 1) Load image to know its natural aspect.
     let rawW = 1
     let rawH = 1
+    let imgObjectUrl: string | null = null
+    let imgSrcForRotate: string = opts.imageUrl
+
+    // Stage A: fetch (0 -> 60)
+    if (opts.imageUrl && typeof fetch !== 'undefined') {
+      try {
+        const isDataUrl = opts.imageUrl.startsWith('data:')
+        const isBlobUrl = opts.imageUrl.startsWith('blob:')
+        if (isDataUrl || isBlobUrl) {
+          loadProgress.value = 60
+        } else {
+          const resp = await fetch(opts.imageUrl, { mode: 'cors' })
+          const total = Number(resp.headers.get('content-length') || 0)
+          const reader = resp.body?.getReader()
+          if (reader && total > 0) {
+            const chunks: Uint8Array[] = []
+            let received = 0
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              if (value) {
+                chunks.push(value)
+                received += value.length
+                loadProgress.value = Math.min(60, Math.round((received / total) * 60))
+              }
+            }
+            const blob = new Blob(chunks as BlobPart[])
+            imgObjectUrl = URL.createObjectURL(blob)
+            lastObjectUrl = imgObjectUrl
+            imgSrcForRotate = imgObjectUrl
+          } else {
+            loadProgress.value = 30
+            const blob = await resp.blob()
+            imgObjectUrl = URL.createObjectURL(blob)
+            lastObjectUrl = imgObjectUrl
+            imgSrcForRotate = imgObjectUrl
+            loadProgress.value = 60
+          }
+        }
+      } catch {
+        imgSrcForRotate = opts.imageUrl
+        loadProgress.value = 30
+      }
+    }
+
+    // Stage B: Image decode (60 -> 80)
     if (typeof Image !== 'undefined' && opts.imageUrl) {
       try {
         const img = new Image()
         img.crossOrigin = 'anonymous'
-        img.src = opts.imageUrl
+        img.src = imgSrcForRotate
         const anyImg = img as unknown as { decode?: () => Promise<void> }
         if (typeof anyImg.decode === 'function') {
           await anyImg.decode.call(img).catch(() => {})
@@ -164,14 +222,12 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
             img.onerror = () => resolve()
           })
         }
+        loadProgress.value = 80
         if (img.naturalWidth > 0 && img.naturalHeight > 0) {
           rawW = img.naturalWidth
           rawH = img.naturalHeight
         }
-        // 2) Portrait viewport + landscape image => rotate the image 90deg CW
-        //    by drawing it into a canvas. Everything downstream then treats
-        //    it as a natively portrait image, so background-mapping needs no
-        //    special-case code.
+        // Stage C: rotate (80 -> 90)
         const portraitViewport =
           typeof window !== 'undefined'
             ? window.innerHeight >= window.innerWidth
@@ -192,21 +248,21 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
               rawW = rawH
               rawH = tmp
             } else {
-              renderImageUrl.value = opts.imageUrl
+              renderImageUrl.value = imgObjectUrl || opts.imageUrl
             }
           } catch {
-            renderImageUrl.value = opts.imageUrl
+            renderImageUrl.value = imgObjectUrl || opts.imageUrl
           }
         } else {
-          renderImageUrl.value = opts.imageUrl
+          renderImageUrl.value = imgObjectUrl || opts.imageUrl
         }
+        loadProgress.value = 90
       } catch {
-        renderImageUrl.value = opts.imageUrl
+        renderImageUrl.value = imgObjectUrl || opts.imageUrl
       }
     }
 
-    // 3) Post-rotation logical dimensions drive both the pickGrid ratio and
-    //    the internal board pixel size (used only for piece bg math).
+    // Stage D: pickGrid + generateGridPieces (90 -> 100)
     boardW.value = rawW
     boardH.value = rawH
     aspect.value = rawW / rawH
@@ -240,6 +296,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     failed.value = false
     frozen.value = false
     startTimer()
+    loadProgress.value = 100
+    loading.value = false
   }
 
   function moveGroup(pieceId: number, dCol: number, dRow: number): boolean {
@@ -360,6 +418,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     failed,
     frozen,
     placedCount,
+    loading,
+    loadProgress,
     init,
     moveGroup,
     moveGroupToSlot,

@@ -33,6 +33,15 @@
         @move-group="onMoveGroup"
         @move-group-to-slot="onMoveGroupToSlot"
       />
+      <div v-if="loading" class="loading-overlay">
+        <div class="loading-card">
+          <div class="loading-title">正在加载图片…</div>
+          <div class="progress-track">
+            <div class="progress-fill" :style="{ width: loadProgress + '%' }"></div>
+          </div>
+          <div class="progress-num">{{ loadProgress }}%</div>
+        </div>
+      </div>
     </div>
 
     <div class="items card" ref="itemsRef">
@@ -99,6 +108,7 @@ const {
   cols, rows, aspect, renderImageUrl,
   pieces, timeLeft, running, finished, failed, frozen,
   placedCount,
+  loading, loadProgress,
   init, moveGroup, moveGroupToSlot, useRestore, useFreeze, reviveByAd
 } = usePuzzleGame({
   imageUrl: props.imageUrl,
@@ -227,10 +237,54 @@ onBeforeUnmount(() => {
 .score { font-size: 14px; font-weight: bold; }
 
 .board-holder {
+  position: relative;
   display: flex;
   justify-content: center;
   padding: 0 16px; /* 16px safe margin on both sides */
   width: 100%;
+}
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(2px);
+  z-index: 20;
+  border-radius: var(--radius-md);
+}
+.loading-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  min-width: 200px;
+  padding: 20px 24px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.loading-title {
+  font-size: 14px;
+  color: var(--color-text);
+  font-weight: 600;
+}
+.progress-track {
+  width: 180px;
+  height: 8px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: #d4af37;
+  transition: width 0.15s linear;
+}
+.progress-num {
+  font-size: 12px;
+  color: var(--color-text-soft);
 }
 
 .items {

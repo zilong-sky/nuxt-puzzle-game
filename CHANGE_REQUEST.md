@@ -1,136 +1,224 @@
-# 自拍模式难度上限约束
+# 加载进度条
 
 ## 目标
-1. 拼图切完总高度不能超出手机可视区，否则用户没法玩（要滑屏幕）。
-2. 自动算出"最高安全难度"，实时提示给用户，并且**不允许**用户选超过这个值的难度。
-
-## 约束推导
-
-PuzzleGame 里棋盘 `.puzzle-wrap` 的尺寸公式（当前）：
-- 宽约束：`min(100vw - 32, 560)`
-- 高约束：`min(100dvh - 240, 900)`
-- 内接图片 aspect，取更约束一侧为长边
-- 底线：任意格子 ≥ 50×50 CSS 逻辑像素
-
-"最高难度"其实等价于**在满足高度约束下，格数 = cols × rows 的最大值**。给定图片 aspect（旋转后 `a = W/H`）：
-- 令 wrapH 上限 = `min(window.innerHeight - 240, 900)`，wrapW 上限 = `min(window.innerWidth - 32, 560)`
-- 内接后 wrap 实际尺寸: 若 `wrapW_max / a <= wrapH_max` → `wrapW=wrapW_max, wrapH=wrapW_max/a`；否则 `wrapH=wrapH_max, wrapW=wrapH_max*a`
-- 每格必须 ≥ 50px 逻辑像素，所以 `cols ≤ wrapW/50`，`rows ≤ wrapH/50`
-- pickGrid 会按 aspect 选接近正方形的格子，所以最大格数近似 `floor(wrapW/50) * floor(wrapH/50)`
-
-⚠️ 注意 pickGrid 的搜索范围是 target ∈ [0.75×N, 1.3×N]，实际选出的总数会略偏离 N。为了保守，把上限再打 0.85 折。
+用户从菜单点进游戏后，或者切换到下一张图时，如果图片还在下载/decode/切块，页面看起来卡了。需要一个覆盖在棋盘位置的进度条，让用户明确知道在加载。整个 init() 过程都在 loading 状态里，直到实际能玩。
 
 ## 修改
 
-### A. 抽一个工具函数（新建 `app/utils/difficultyLimit.ts`）
+### A. `app/composables/usePuzzleGame.ts` 暴露加载状态
+
+新增 refs：
 ```ts
-export interface DifficultyLimitOpts {
-  imgW: number   // 图片原始宽
-  imgH: number   // 图片原始高
-  minCellPx?: number   // 默认 50
-  reserveH?: number    // 视口高度扣除量，默认 240（header/hud/items/footer）
-  reserveW?: number    // 视口宽度扣除量，默认 32（左右 padding）
-  maxWrapW?: number    // 默认 560
-  maxWrapH?: number    // 默认 900
-  hardMin?: number     // 拼图最少块数，默认 4
-  hardMax?: number     // 拼图最多块数，默认 200
-  vw?: number          // 传入以便 SSR / 测试
-  vh?: number
-}
+const loading = ref(true)      // true 表示 init 还没完成
+const loadProgress = ref(0)    // 0 - 100
+```
+在 return 里加入。
 
-export function computeMaxPieces(o: DifficultyLimitOpts): number {
-  const minCell = o.minCellPx ?? 50
-  const reserveH = o.reserveH ?? 240
-  const reserveW = o.reserveW ?? 32
-  const maxWrapW = o.maxWrapW ?? 560
-  const maxWrapH = o.maxWrapH ?? 900
-  const hardMax = o.hardMax ?? 200
-  const hardMin = o.hardMin ?? 4
-  const vw = o.vw ?? (typeof window !== 'undefined' ? window.innerWidth : 400)
-  const vh = o.vh ?? (typeof window !== 'undefined' ? window.innerHeight : 800)
+改 `init()` 顺序，按阶段更新进度：
 
-  // 视口竖屏但图片横向 → 旋转后 W↔H 交换（与 usePuzzleGame 逻辑保持一致）
-  const portraitViewport = vh >= vw
-  const portraitImage = o.imgH >= o.imgW
-  const rotated = portraitViewport && !portraitImage
-  const W = rotated ? o.imgH : o.imgW
-  const H = rotated ? o.imgW : o.imgH
-  const a = W / H
+```ts
+async function init() {
+  loading.value = true
+  loadProgress.value = 0
 
-  const capW = Math.min(vw - reserveW, maxWrapW)
-  const capH = Math.min(vh - reserveH, maxWrapH)
-  // 内接矩形
-  let wrapW = capW, wrapH = capW / a
-  if (wrapH > capH) { wrapH = capH; wrapW = capH * a }
+  // 阶段 A：下载图片（用 fetch 读 stream 拿真实字节进度；失败/无 content-length 时降级为虚拟进度）
+  let rawW = 1, rawH = 1
+  let imgObjectUrl: string | null = null
+  let imgSrcForRotate: string = opts.imageUrl
 
-  const maxCols = Math.max(2, Math.floor(wrapW / minCell))
-  const maxRows = Math.max(2, Math.floor(wrapH / minCell))
-  // pickGrid 会按 aspect 选接近正方形的格子；上限约等于 maxCols*maxRows，再保守 0.85 倍
-  const raw = Math.floor(maxCols * maxRows * 0.85)
-  return Math.min(hardMax, Math.max(hardMin, raw))
+  if (opts.imageUrl && typeof fetch !== 'undefined') {
+    try {
+      const isDataUrl = opts.imageUrl.startsWith('data:')
+      const isBlobUrl = opts.imageUrl.startsWith('blob:')
+      if (isDataUrl || isBlobUrl) {
+        // 本地已就绪，直接跳到 60%
+        loadProgress.value = 60
+      } else {
+        const resp = await fetch(opts.imageUrl, { mode: 'cors' })
+        const total = Number(resp.headers.get('content-length') || 0)
+        const reader = resp.body?.getReader()
+        if (reader && total > 0) {
+          const chunks: Uint8Array[] = []
+          let received = 0
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (value) {
+              chunks.push(value)
+              received += value.length
+              // 下载占 0 - 60
+              loadProgress.value = Math.min(60, Math.round((received / total) * 60))
+            }
+          }
+          const blob = new Blob(chunks)
+          imgObjectUrl = URL.createObjectURL(blob)
+          imgSrcForRotate = imgObjectUrl
+        } else {
+          // 无 stream 或无 content-length：把响应转 blob，用虚拟进度
+          loadProgress.value = 30
+          const blob = await resp.blob()
+          imgObjectUrl = URL.createObjectURL(blob)
+          imgSrcForRotate = imgObjectUrl
+          loadProgress.value = 60
+        }
+      }
+    } catch {
+      // fetch 失败：降级，让 Image() 自己去加载
+      imgSrcForRotate = opts.imageUrl
+      loadProgress.value = 30
+    }
+  }
+
+  // 阶段 B：Image + decode（占 60 → 80）
+  if (typeof Image !== 'undefined' && opts.imageUrl) {
+    try {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.src = imgSrcForRotate
+      const anyImg = img as unknown as { decode?: () => Promise<void> }
+      if (typeof anyImg.decode === 'function') {
+        await anyImg.decode.call(img).catch(() => {})
+      } else {
+        await new Promise<void>((resolve) => {
+          img.onload = () => resolve()
+          img.onerror = () => resolve()
+        })
+      }
+      loadProgress.value = 80
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        rawW = img.naturalWidth
+        rawH = img.naturalHeight
+      }
+      // 阶段 C：旋转（占 80 → 90）
+      const portraitViewport = typeof window !== 'undefined' ? window.innerHeight >= window.innerWidth : true
+      const landscapeImage = rawW > rawH
+      if (portraitViewport && landscapeImage && typeof document !== 'undefined') {
+        try {
+          const canvas = document.createElement('canvas')
+          canvas.width = rawH
+          canvas.height = rawW
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.translate(rawH, 0)
+            ctx.rotate(Math.PI / 2)
+            ctx.drawImage(img, 0, 0)
+            renderImageUrl.value = canvas.toDataURL('image/jpeg', 0.92)
+            const tmp = rawW; rawW = rawH; rawH = tmp
+          } else {
+            renderImageUrl.value = imgObjectUrl || opts.imageUrl
+          }
+        } catch {
+          renderImageUrl.value = imgObjectUrl || opts.imageUrl
+        }
+      } else {
+        renderImageUrl.value = imgObjectUrl || opts.imageUrl
+      }
+      loadProgress.value = 90
+    } catch {
+      renderImageUrl.value = imgObjectUrl || opts.imageUrl
+    }
+  }
+
+  // 阶段 D：pickGrid + generate + shuffle（占 90 → 100）
+  boardW.value = rawW
+  boardH.value = rawH
+  aspect.value = rawW / rawH
+  const grid = pickGrid(opts.pieceCount, rawW, rawH)
+  cols.value = grid.cols
+  rows.value = grid.rows
+  const cw = rawW / grid.cols
+  const ch = rawH / grid.rows
+  const base = generateGridPieces(grid.cols, grid.rows, rawW, rawH)
+  let indices = base.map((_, i) => i)
+  if (indices.length > 1) {
+    let tries = 0
+    do {
+      indices = shufflePieces(indices)
+      tries++
+    } while (indices.every((v, i) => v === i) && tries < 5)
+  }
+  pieces.value = base.map((p, i) => ({
+    ...p, w: cw, h: ch,
+    slotIndex: indices[i]!,
+    groupId: p.id,
+    groupAligned: false
+  }))
+  recomputeGroups()
+  timeLeft.value = calcCountdown(base.length)
+  running.value = true
+  finished.value = false
+  failed.value = false
+  frozen.value = false
+  startTimer()
+  loadProgress.value = 100
+  loading.value = false
 }
 ```
 
-### B. `selfie.vue` 集成
+**注意**：`init()` 被 `watch(() => [imageUrl, pieceCount])` 反复调用，切图时也会走一遍进度。旧的 objectURL 应该在下一次 init 前 revoke —— 用一个模块级 `let lastObjectUrl: string | null = null`，每次开始时若有则 `URL.revokeObjectURL(lastObjectUrl)`，然后赋新的。
 
-1. **拿到最新一张预览图的 naturalWidth/naturalHeight**（用最后一张作为约束依据；也可以取最"极端"的一张，先按"最后一张"实现简单可靠）：
+### B. `app/components/PuzzleGame.vue` 展示进度覆盖层
+
+1. 从 `usePuzzleGame` 解构 `loading, loadProgress`：
    ```ts
-   const imgDim = ref<{ w: number; h: number } | null>(null)
+   const {
+     cols, rows, aspect, renderImageUrl,
+     pieces, timeLeft, running, finished, failed, frozen,
+     placedCount,
+     loading, loadProgress,
+     init, moveGroup, moveGroupToSlot, useRestore, useFreeze, reviveByAd
+   } = usePuzzleGame({...})
+   ```
 
-   function measureImage(url: string) {
-     const im = new Image()
-     im.onload = () => { imgDim.value = { w: im.naturalWidth, h: im.naturalHeight } }
-     im.src = url
+2. 在 `.board-holder` 内加覆盖层：
+   ```html
+   <div class="board-holder">
+     <PuzzleBoard ... />
+     <div v-if="loading" class="loading-overlay">
+       <div class="loading-card">
+         <div class="loading-title">正在加载图片…</div>
+         <div class="progress-track">
+           <div class="progress-fill" :style="{ width: loadProgress + '%' }"></div>
+         </div>
+         <div class="progress-num">{{ loadProgress }}%</div>
+       </div>
+     </div>
+   </div>
+   ```
+
+3. 样式：
+   ```css
+   .board-holder { position: relative; }
+   .loading-overlay {
+     position: absolute; inset: 0;
+     display: flex; align-items: center; justify-content: center;
+     background: rgba(255,255,255,0.85);
+     backdrop-filter: blur(2px);
+     z-index: 20;
+     border-radius: var(--radius-md);
    }
-   // onFileSelect 里 reader.onload 时 push 后调用 measureImage(reader.result)
-   // capture 里 push 后调用 measureImage(data)
-   // 每次 images 变化时用最后一张的尺寸
-   ```
-   实际实现：把 measure 逻辑做成"每次 push 一张就更新 imgDim 为该张的尺寸"，并且 `removeImage` 时若删掉的是最后一张，回退到前一张的尺寸（简化：干脆每次 images 变都重测最后一张）。
-
-2. **计算 maxPieces**（响应式，随 imgDim / viewport 变化）：
-   ```ts
-   import { computeMaxPieces } from '~/utils/difficultyLimit'
-   const viewportTick = ref(0)
-   onMounted(() => {
-     const handler = () => viewportTick.value++
-     window.addEventListener('resize', handler)
-     window.addEventListener('orientationchange', handler)
-     onBeforeUnmount(() => {
-       window.removeEventListener('resize', handler)
-       window.removeEventListener('orientationchange', handler)
-     })
-   })
-   const maxPieces = computed(() => {
-     viewportTick.value  // 依赖
-     if (!imgDim.value) return 200
-     return computeMaxPieces({ imgW: imgDim.value.w, imgH: imgDim.value.h })
-   })
+   .loading-card {
+     display: flex; flex-direction: column; gap: 10px;
+     align-items: center; min-width: 200px; padding: 20px 24px;
+     background: #fff; border-radius: 12px; box-shadow: var(--shadow-sm);
+   }
+   .loading-title { font-size: 14px; color: var(--color-text); font-weight: 600; }
+   .progress-track {
+     width: 180px; height: 8px; border-radius: 999px;
+     background: #e5e7eb; overflow: hidden;
+   }
+   .progress-fill {
+     height: 100%; background: #d4af37;
+     transition: width 0.15s linear;
+   }
+   .progress-num { font-size: 12px; color: var(--color-text-soft); }
    ```
 
-3. **DifficultyDial 的 max 绑定用 `maxPieces`**：
-   ```html
-   <DifficultyDial v-model="pieceCount" :min="4" :max="maxPieces" label="切块数" />
-   ```
-   同时 `range-hint` 右侧文案改成动态：`{{ maxPieces }} (最难)`。
-
-4. **超限自动 clamp**：`watch(maxPieces, (m) => { if (pieceCount.value > m) pieceCount.value = m })`。
-
-5. **提示文案**：在 `.difficulty` 下面加一行小字：
-   ```html
-   <p class="limit-hint" v-if="imgDim">
-     根据当前手机屏幕和图片比例，最高难度 <strong>{{ maxPieces }}</strong> 块；再高会超出屏幕。
-   </p>
-   ```
-   样式 `font-size: 12px; color: var(--color-text-soft); text-align: center;`
-
-6. **randomize 也 clamp**：`pieceCount.value = randInt(4, maxPieces.value)`。
-
-7. **开始按钮附加二次校验**（保险）：`startGame` 里若 `pieceCount.value > maxPieces.value`，alert 并 return。
+4. **让 HUD 计时器不要在 loading 时倒数**：其实 `running` 在 `init` 快结束才被置 true，`startTimer` 也在最后，所以 loading 期间没问题；确认无需额外处理。
 
 ## 交付
 
 1. `npm run build` 通过。
-2. `git add -A && git commit -m "feat(selfie): cap difficulty by viewport & image ratio"`。
+2. `git add -A && git commit -m "feat(loading): board-level progress overlay while init"`。
 3. `git push origin master`（失败重试一次）。
 4. 全程自主完成，不要询问。
