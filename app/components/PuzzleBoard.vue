@@ -1,4 +1,4 @@
-﻿<!--
+<!--
   app/components/PuzzleBoard.vue
   Group-aware swap board. Pieces are grouped when they are neighbors in
   both the current slot layout and the correct layout. A drag or a
@@ -10,6 +10,7 @@
   <div class="puzzle-wrap" ref="wrapRef">
     <div
       class="board"
+      :class="{ 'is-dragging': draggingGroupId !== null }"
       :style="{ aspectRatio: `${boardW} / ${boardH}` }"
     >
       <img
@@ -72,7 +73,6 @@ const wrapRef = ref<HTMLElement | null>(null)
 
 const draggingGroupId = ref<number | null>(null)
 const selectedGroupId = ref<number | null>(null)
-const dragOffset = ref<{ x: number; y: number }>({ x: 0, y: 0 })
 const dragLegal = ref(false)
 const hoverTargets = ref<Set<number>>(new Set())
 
@@ -131,12 +131,6 @@ function pieceStyle(p: PieceState): Record<string, string> {
     height: `${hPct}%`,
     left: `${col * wPct}%`,
     top: `${row * hPct}%`
-  }
-  if (draggingGroupId.value === p.groupId) {
-    style.transform = `translate(${dragOffset.value.x}px, ${dragOffset.value.y}px) scale(1.05)`
-    style.zIndex = '999'
-  } else {
-    style.transform = 'translate(0, 0)'
   }
   return style
 }
@@ -198,6 +192,9 @@ interface DragState {
   raf: number | null
   curDx: number
   curDy: number
+  members: PieceState[]
+  lastDCol: number
+  lastDRow: number
 }
 let drag: DragState | null = null
 const CLICK_THRESHOLD = 6
@@ -211,9 +208,14 @@ function pieceById(id: number): PieceState | undefined {
 }
 
 function computeGroupMove(pieceId: number, dCol: number, dRow: number) {
-  const anchor = pieceById(pieceId)
-  if (!anchor) return { legal: false, targets: new Set<number>() }
-  const members = props.pieces.filter((p) => p.groupId === anchor.groupId)
+  let members: PieceState[] | null = null
+  if (drag && drag.pieceId === pieceId) {
+    members = drag.members
+  } else {
+    const anchor = pieceById(pieceId)
+    if (!anchor) return { legal: false, targets: new Set<number>() }
+    members = props.pieces.filter((p) => p.groupId === anchor.groupId)
+  }
   const targets = new Set<number>()
   for (const m of members) {
     const c = (m.slotIndex % props.cols) + dCol
@@ -242,7 +244,10 @@ function onPointerDown(e: PointerEvent, id: number) {
     moved: false,
     raf: null,
     curDx: 0,
-    curDy: 0
+    curDy: 0,
+    members: props.pieces.filter((pp) => pp.groupId === piece.groupId),
+    lastDCol: -9999,
+    lastDRow: -9999
   }
   ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   window.addEventListener('pointermove', onPointerMove)
@@ -257,11 +262,18 @@ function scheduleUpdate() {
   drag.raf = requestAnimationFrame(() => {
     if (!drag) return
     drag.raf = null
-    dragOffset.value = { x: drag.curDx, y: drag.curDy }
+    const boardEl = getBoardEl()
+    if (boardEl) {
+      boardEl.style.setProperty('--drag-dx', drag.curDx + 'px')
+      boardEl.style.setProperty('--drag-dy', drag.curDy + 'px')
+    }
     const cellW = drag.boardRect.width / props.cols
     const cellH = drag.boardRect.height / props.rows
     const dCol = Math.round(drag.curDx / cellW)
     const dRow = Math.round(drag.curDy / cellH)
+    if (dCol === drag.lastDCol && dRow === drag.lastDRow) return
+    drag.lastDCol = dCol
+    drag.lastDRow = dRow
     const { legal, targets } = computeGroupMove(drag.pieceId, dCol, dRow)
     dragLegal.value = legal && (dCol !== 0 || dRow !== 0)
     hoverTargets.value = legal ? targets : new Set()
@@ -294,9 +306,13 @@ function onPointerUp(e: PointerEvent) {
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerUp)
   if (drag.raf != null) cancelAnimationFrame(drag.raf)
+  const boardElUp = getBoardEl()
+  if (boardElUp) {
+    boardElUp.style.setProperty('--drag-dx', '0px')
+    boardElUp.style.setProperty('--drag-dy', '0px')
+  }
   drag = null
   draggingGroupId.value = null
-  dragOffset.value = { x: 0, y: 0 }
   hoverTargets.value = new Set()
   dragLegal.value = false
 
@@ -346,6 +362,11 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
+  --drag-dx: 0px;
+  --drag-dy: 0px;
+}
+.board.is-dragging .piece:not(.dragging) {
+  transition: none;
 }
 .board-ghost {
   position: absolute;
@@ -381,6 +402,8 @@ onBeforeUnmount(() => {
 .piece.dragging {
   cursor: grabbing;
   transition: none;
+  transform: translate3d(var(--drag-dx), var(--drag-dy), 0) scale(1.05);
+  z-index: 999;
   filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.35));
 }
 .piece-fill {
