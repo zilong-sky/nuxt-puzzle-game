@@ -12,7 +12,7 @@
  * batch swap: pieces displaced by the group land in the slots the group
  * vacated (paired one-to-one by ascending slotIndex).
  */
-import { computed, onUnmounted, ref, shallowRef, triggerRef } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { generateGridPieces, pickGrid, shufflePieces, type Piece } from '~/utils/puzzle'
 import { calcCountdown } from '~/utils/time'
 
@@ -50,7 +50,7 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   const cellW = computed(() => boardW.value / cols.value)
   const cellH = computed(() => boardH.value / rows.value)
 
-  const pieces = shallowRef<PieceState[]>([])
+  const pieces = ref<PieceState[]>([])
   const timeLeft = ref(0)
   const running = ref(false)
   const finished = ref(false)
@@ -275,8 +275,6 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
       displaced[k]!.slotIndex = freeSlots[k]!
     }
     recomputeGroups()
-    // Flush the batched mutations to reactive consumers exactly once.
-    triggerRef(pieces)
     checkFinished()
     return true
   }
