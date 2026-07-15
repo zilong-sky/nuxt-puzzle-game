@@ -1,16 +1,10 @@
 ﻿<!--
   app/components/PuzzleBoard.vue
-  Swap-only rectangular grid puzzle board. All pieces always sit on the
-  board; there is no tray. Interaction modes:
-
-  - Click-click: tap a piece to select (highlighted), tap another to swap;
-    tap the same piece again to deselect.
-  - Drag-drop: press and drag a piece; on release over another piece the
-    two swap; released elsewhere returns to origin.
-
-  The board scales itself to fit the viewport (mobile-first). Internal
-  coordinates use a fixed logical size (boardW x boardH); an outer wrapper
-  applies CSS scale via width so % positions naturally adapt.
+  Group-aware swap board. Pieces are grouped when they are neighbors in
+  both the current slot layout and the correct layout. A drag or a
+  click-click move applies to the entire group as a batch swap. Between
+  pieces from different groups a 2px gap is drawn (board background
+  showing through); same-group neighbors render with no visible seam.
 -->
 <template>
   <div class="puzzle-wrap" ref="wrapRef">
@@ -24,8 +18,7 @@
         :key="`slot-${s.index}`"
         class="slot"
         :class="{
-          'slot-selectable': selectedId !== null,
-          'slot-active': hoverSlot === s.index && draggingId !== null
+          'slot-active': hoverTargets.has(s.index) && draggingGroupId !== null
         }"
         :style="slotStyle(s)"
       />
@@ -34,13 +27,15 @@
         :key="p.id"
         class="piece"
         :class="{
-          dragging: draggingId === p.id,
-          selected: selectedId === p.id,
-          placed: p.slotIndex === p.correctIndex
+          dragging: draggingGroupId === p.groupId,
+          selected: selectedGroupId === p.groupId,
+          'group-aligned': p.groupAligned
         }"
         :style="pieceStyle(p)"
         @pointerdown="onPointerDown($event, p.id)"
-      />
+      >
+        <div class="piece-fill" :style="fillStyle(p)" />
+      </div>
     </div>
   </div>
 </template>
@@ -59,15 +54,17 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  swap: [aId: number, bId: number]
+  moveGroup: [pieceId: number, dCol: number, dRow: number]
+  moveGroupToSlot: [pieceId: number, targetSlot: number]
 }>()
 
 const wrapRef = ref<HTMLElement | null>(null)
 
-const draggingId = ref<number | null>(null)
-const selectedId = ref<number | null>(null)
-const hoverSlot = ref<number | null>(null)
-const dragPos = ref<{ x: number; y: number } | null>(null)
+const draggingGroupId = ref<number | null>(null)
+const selectedGroupId = ref<number | null>(null)
+const dragOffset = ref<{ x: number; y: number }>({ x: 0, y: 0 })
+const dragLegal = ref(false)
+const hoverTargets = ref<Set<number>>(new Set())
 
 const slots = computed(() => {
   const list: { index: number; row: number; col: number }[] = []
@@ -79,7 +76,12 @@ const slots = computed(() => {
   return list
 })
 
-/* Percent-based positioning so the board can scale freely. */
+const slotMap = computed(() => {
+  const m = new Map<number, PieceState>()
+  for (const p of props.pieces) m.set(p.slotIndex, p)
+  return m
+})
+
 function slotStyle(s: { row: number; col: number }) {
   const wPct = 100 / props.cols
   const hPct = 100 / props.rows
@@ -91,74 +93,118 @@ function slotStyle(s: { row: number; col: number }) {
   }
 }
 
-function pieceBasePosition(p: PieceState): { xPct: number; yPct: number } {
+/** Inset (px) on each side, 1 when there is a gap, 0 when merged with a
+ *  same-group neighbor. Total gap between pieces = 2px. */
+function neighborInsets(p: PieceState): { t: number; r: number; b: number; l: number } {
   const col = p.slotIndex % props.cols
   const row = Math.floor(p.slotIndex / props.cols)
-  return { xPct: col * (100 / props.cols), yPct: row * (100 / props.rows) }
+  const map = slotMap.value
+  const same = (nSlot: number) => {
+    const n = map.get(nSlot)
+    return !!n && n.groupId === p.groupId
+  }
+  return {
+    t: row > 0 && same(p.slotIndex - props.cols) ? 0 : 1,
+    r: col < props.cols - 1 && same(p.slotIndex + 1) ? 0 : 1,
+    b: row < props.rows - 1 && same(p.slotIndex + props.cols) ? 0 : 1,
+    l: col > 0 && same(p.slotIndex - 1) ? 0 : 1
+  }
 }
 
 function pieceStyle(p: PieceState): Record<string, string> {
-  const isDragging = draggingId.value === p.id
+  const col = p.slotIndex % props.cols
+  const row = Math.floor(p.slotIndex / props.cols)
   const wPct = 100 / props.cols
   const hPct = 100 / props.rows
-  if (isDragging && dragPos.value) {
-    return {
-      width: `${wPct}%`,
-      height: `${hPct}%`,
-      left: `${dragPos.value.x}px`,
-      top: `${dragPos.value.y}px`,
-      transform: `translate(-50%, -50%) scale(1.08)`,
-      backgroundImage: `url(${props.imageUrl})`,
-      backgroundSize: `${props.cols * 100}% ${props.rows * 100}%`,
-      backgroundPosition: `${(p.col / Math.max(1, props.cols - 1)) * 100}% ${(p.row / Math.max(1, props.rows - 1)) * 100}%`
-    }
-  }
-  const base = pieceBasePosition(p)
-  return {
+  const style: Record<string, string> = {
     width: `${wPct}%`,
     height: `${hPct}%`,
-    left: `${base.xPct}%`,
-    top: `${base.yPct}%`,
-    transform: `translate(0, 0)`,
+    left: `${col * wPct}%`,
+    top: `${row * hPct}%`
+  }
+  if (draggingGroupId.value === p.groupId) {
+    style.transform = `translate(${dragOffset.value.x}px, ${dragOffset.value.y}px) scale(1.05)`
+    style.zIndex = '999'
+  } else {
+    style.transform = 'translate(0, 0)'
+  }
+  return style
+}
+
+function fillStyle(p: PieceState): Record<string, string> {
+  const ins = neighborInsets(p)
+  const bgW = props.cols * 100
+  const bgH = props.rows * 100
+  const bgX = props.cols > 1 ? (p.col / (props.cols - 1)) * 100 : 0
+  const bgY = props.rows > 1 ? (p.row / (props.rows - 1)) * 100 : 0
+  return {
+    top: `${ins.t}px`,
+    right: `${ins.r}px`,
+    bottom: `${ins.b}px`,
+    left: `${ins.l}px`,
     backgroundImage: `url(${props.imageUrl})`,
-    backgroundSize: `${props.cols * 100}% ${props.rows * 100}%`,
-    backgroundPosition: `${(p.col / Math.max(1, props.cols - 1)) * 100}% ${(p.row / Math.max(1, props.rows - 1)) * 100}%`
+    backgroundSize: `${bgW}% ${bgH}%`,
+    backgroundPosition: `${bgX}% ${bgY}%`
   }
 }
 
-/* ---------- Pointer events (click-or-drag) ---------- */
+/* ---------- pointer / drag logic ---------- */
 interface DragState {
-  id: number
+  pieceId: number
+  groupId: number
   pointerId: number
   startX: number
   startY: number
   boardRect: DOMRect
   moved: boolean
-  currentX: number
-  currentY: number
   raf: number | null
+  curDx: number
+  curDy: number
 }
 let drag: DragState | null = null
-const CLICK_THRESHOLD = 6 // px before we treat it as a drag
+const CLICK_THRESHOLD = 6
 
 function getBoardEl(): HTMLElement | null {
   return wrapRef.value?.querySelector('.board') as HTMLElement | null
+}
+
+function pieceById(id: number): PieceState | undefined {
+  return props.pieces.find((p) => p.id === id)
+}
+
+function computeGroupMove(pieceId: number, dCol: number, dRow: number) {
+  const anchor = pieceById(pieceId)
+  if (!anchor) return { legal: false, targets: new Set<number>() }
+  const members = props.pieces.filter((p) => p.groupId === anchor.groupId)
+  const targets = new Set<number>()
+  for (const m of members) {
+    const c = (m.slotIndex % props.cols) + dCol
+    const r = Math.floor(m.slotIndex / props.cols) + dRow
+    if (c < 0 || c >= props.cols || r < 0 || r >= props.rows) {
+      return { legal: false, targets: new Set<number>() }
+    }
+    targets.add(r * props.cols + c)
+  }
+  return { legal: true, targets }
 }
 
 function onPointerDown(e: PointerEvent, id: number) {
   const boardEl = getBoardEl()
   if (!boardEl) return
   const rect = boardEl.getBoundingClientRect()
+  const piece = pieceById(id)
+  if (!piece) return
   drag = {
-    id,
+    pieceId: id,
+    groupId: piece.groupId,
     pointerId: e.pointerId,
     startX: e.clientX,
     startY: e.clientY,
     boardRect: rect,
     moved: false,
-    currentX: e.clientX - rect.left,
-    currentY: e.clientY - rect.top,
-    raf: null
+    raf: null,
+    curDx: 0,
+    curDy: 0
   }
   ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   window.addEventListener('pointermove', onPointerMove)
@@ -171,25 +217,17 @@ function scheduleUpdate() {
   if (!drag) return
   if (drag.raf != null) return
   drag.raf = requestAnimationFrame(() => {
-    if (drag) drag.raf = null
     if (!drag) return
-    dragPos.value = { x: drag.currentX, y: drag.currentY }
-    updateHoverSlot()
+    drag.raf = null
+    dragOffset.value = { x: drag.curDx, y: drag.curDy }
+    const cellW = drag.boardRect.width / props.cols
+    const cellH = drag.boardRect.height / props.rows
+    const dCol = Math.round(drag.curDx / cellW)
+    const dRow = Math.round(drag.curDy / cellH)
+    const { legal, targets } = computeGroupMove(drag.pieceId, dCol, dRow)
+    dragLegal.value = legal && (dCol !== 0 || dRow !== 0)
+    hoverTargets.value = legal ? targets : new Set()
   })
-}
-
-function updateHoverSlot() {
-  if (!drag) return
-  const rect = drag.boardRect
-  const cx = drag.currentX
-  const cy = drag.currentY
-  if (cx < 0 || cy < 0 || cx > rect.width || cy > rect.height) {
-    hoverSlot.value = null
-    return
-  }
-  const col = Math.max(0, Math.min(props.cols - 1, Math.floor((cx / rect.width) * props.cols)))
-  const row = Math.max(0, Math.min(props.rows - 1, Math.floor((cy / rect.height) * props.rows)))
-  hoverSlot.value = row * props.cols + col
 }
 
 function onPointerMove(e: PointerEvent) {
@@ -198,49 +236,54 @@ function onPointerMove(e: PointerEvent) {
   const dy = e.clientY - drag.startY
   if (!drag.moved && Math.hypot(dx, dy) > CLICK_THRESHOLD) {
     drag.moved = true
-    draggingId.value = drag.id
-    // clear click-selection when a drag begins
-    selectedId.value = null
+    draggingGroupId.value = drag.groupId
+    selectedGroupId.value = null
   }
-  drag.currentX = e.clientX - drag.boardRect.left
-  drag.currentY = e.clientY - drag.boardRect.top
+  drag.curDx = dx
+  drag.curDy = dy
   if (drag.moved) scheduleUpdate()
-}
-
-function findPieceInSlot(slotIndex: number): PieceState | undefined {
-  return props.pieces.find((p) => p.slotIndex === slotIndex)
 }
 
 function onPointerUp(e: PointerEvent) {
   if (!drag || e.pointerId !== drag.pointerId) return
   const wasDrag = drag.moved
-  const id = drag.id
-  const target = hoverSlot.value
+  const pid = drag.pieceId
+  const cellW = drag.boardRect.width / props.cols
+  const cellH = drag.boardRect.height / props.rows
+  const dCol = Math.round(drag.curDx / cellW)
+  const dRow = Math.round(drag.curDy / cellH)
   window.removeEventListener('pointermove', onPointerMove)
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerUp)
   if (drag.raf != null) cancelAnimationFrame(drag.raf)
   drag = null
-  draggingId.value = null
-  dragPos.value = null
-  hoverSlot.value = null
+  draggingGroupId.value = null
+  dragOffset.value = { x: 0, y: 0 }
+  hoverTargets.value = new Set()
+  dragLegal.value = false
 
   if (wasDrag) {
-    if (target == null) return
-    const other = findPieceInSlot(target)
-    if (!other || other.id === id) return
-    emit('swap', id, other.id)
+    if (dCol === 0 && dRow === 0) return
+    // moveGroup emits; the parent decides legality. If illegal it will
+    // simply do nothing and the piece has already sprung back visually.
+    emit('moveGroup', pid, dCol, dRow)
     return
   }
 
-  // click behaviour
-  if (selectedId.value === null) {
-    selectedId.value = id
-  } else if (selectedId.value === id) {
-    selectedId.value = null
+  // click behaviour: select a group; a second click on another group
+  // computes delta from the selected group''s anchor piece.
+  const piece = pieceById(pid)
+  if (!piece) return
+  if (selectedGroupId.value === null) {
+    selectedGroupId.value = piece.groupId
+  } else if (selectedGroupId.value === piece.groupId) {
+    selectedGroupId.value = null
   } else {
-    emit('swap', selectedId.value, id)
-    selectedId.value = null
+    const anchor = props.pieces.find((p) => p.groupId === selectedGroupId.value!)
+    if (anchor) {
+      emit('moveGroupToSlot', anchor.id, piece.slotIndex)
+    }
+    selectedGroupId.value = null
   }
 }
 
@@ -261,7 +304,7 @@ onBeforeUnmount(() => {
 .board {
   position: relative;
   width: 100%;
-  background: #f0f2f7;
+  background: #c8ccd6;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
@@ -279,41 +322,41 @@ onBeforeUnmount(() => {
 .slot {
   position: absolute;
   background: transparent;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  transition: box-shadow 0.15s ease, border-color 0.15s ease;
   pointer-events: none;
+  transition: box-shadow 0.15s ease;
 }
-.slot-selectable { border-color: rgba(245, 196, 81, 0.5); }
 .slot-active {
-  border-color: #f5c451;
-  box-shadow: 0 0 12px rgba(245, 196, 81, 0.7) inset;
+  box-shadow: 0 0 0 2px #f5c451 inset,
+    0 0 12px rgba(245, 196, 81, 0.6) inset;
 }
 .piece {
   position: absolute;
-  will-change: transform, left, top;
   cursor: grab;
-  border-radius: 2px;
   transform-origin: center center;
-  transition: left 0.15s ease, top 0.15s ease, transform 0.15s ease,
-    box-shadow 0.15s ease, outline-color 0.15s ease;
+  transition: left 0.15s ease, top 0.15s ease, transform 0.2s ease;
+  will-change: transform, left, top;
+}
+.piece.dragging {
+  cursor: grabbing;
+  transition: none;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.35));
+}
+.piece-fill {
+  position: absolute;
   background-repeat: no-repeat;
   background-color: #ccc;
+  border-radius: 2px;
+  transition: outline-color 0.15s ease, box-shadow 0.15s ease;
   outline: 2px solid transparent;
   outline-offset: -2px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
-.piece.placed {
-  outline-color: rgba(16, 185, 129, 0.55);
-}
-.piece.selected {
+.piece.selected .piece-fill {
   outline-color: #f5c451;
   box-shadow: 0 0 12px rgba(245, 196, 81, 0.8);
-  z-index: 20;
 }
-.piece.dragging {
-  cursor: grabbing;
-  filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.35));
-  z-index: 999;
-  transition: none;
+.piece.group-aligned .piece-fill {
+  outline-color: #d4af37;
+  box-shadow: 0 0 10px rgba(212, 175, 55, 0.55);
 }
 </style>

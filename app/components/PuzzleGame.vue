@@ -30,7 +30,8 @@
         :rows="rows"
         :board-w="boardW"
         :board-h="boardH"
-        @swap="onSwap"
+        @move-group="onMoveGroup"
+        @move-group-to-slot="onMoveGroupToSlot"
       />
     </div>
 
@@ -98,7 +99,7 @@ const {
   boardW, boardH, cols, rows,
   pieces, timeLeft, running, finished, failed, frozen,
   placedCount,
-  init, swapPieces, useRestore, useFreeze, reviveByAd
+  init, moveGroup, moveGroupToSlot, useRestore, useFreeze, reviveByAd
 } = usePuzzleGame({
   imageUrl: props.imageUrl,
   pieceCount: props.pieceCount,
@@ -118,8 +119,11 @@ watch(
   () => init()
 )
 
-function onSwap(aId: number, bId: number) {
-  swapPieces(aId, bId)
+function onMoveGroup(pieceId: number, dCol: number, dRow: number) {
+  moveGroup(pieceId, dCol, dRow)
+}
+function onMoveGroupToSlot(pieceId: number, targetSlot: number) {
+  moveGroupToSlot(pieceId, targetSlot)
 }
 function doRestore() {
   if (game.useItem('restore')) useRestore()
@@ -216,4 +220,5 @@ function onAdDone() {
   }
 }
 </style>
+
 

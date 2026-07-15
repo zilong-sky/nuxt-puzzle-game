@@ -1,17 +1,28 @@
 ﻿/**
  * app/composables/usePuzzleGame.ts
  *
- * Swap-only puzzle state. Every piece always occupies exactly one slot on
- * the board; there is no tray and no empty slot. Players swap two pieces
- * until every piece.slotIndex === piece.correctIndex.
+ * Group-aware swap puzzle state. Every piece always occupies exactly one
+ * slot. Pieces are unioned into groups (classic jigsaw semantics): two
+ * pieces A, B belong to the same group iff their current slots are
+ * neighbors (row or column adjacent by 1) AND their correctIndex values
+ * are neighbors in the same direction.
+ *
+ * A move (drag or click-click) shifts a whole group by (dCol, dRow). It
+ * succeeds only if every new slot stays inside the board. The move is a
+ * batch swap: pieces displaced by the group land in the slots the group
+ * vacated (paired one-to-one by ascending slotIndex).
  */
 import { computed, onUnmounted, ref } from 'vue'
 import { generateGridPieces, pickGrid, shufflePieces, type Piece } from '~/utils/puzzle'
 import { calcCountdown } from '~/utils/time'
 
 export interface PieceState extends Piece {
-  /** Current slot index on the board (0..N-1). Every piece has one. */
+  /** Current slot index on the board (0..N-1). */
   slotIndex: number
+  /** Group identifier (a stable piece id serving as representative). */
+  groupId: number
+  /** Whether every member of this piece''s group is at its correct slot. */
+  groupAligned: boolean
 }
 
 export interface UsePuzzleOptions {
@@ -62,6 +73,73 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }, 1000)
   }
 
+  /* -------------- group computation (Union-Find) -------------- */
+  function recomputeGroups() {
+    const list = pieces.value
+    const N = list.length
+    const C = cols.value
+    const R = rows.value
+    if (N === 0) return
+    const parent = new Array(N)
+    for (let i = 0; i < N; i++) parent[i] = i
+    const find = (x: number): number => {
+      while (parent[x] !== x) {
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+      }
+      return x
+    }
+    const union = (a: number, b: number) => {
+      const ra = find(a); const rb = find(b)
+      if (ra !== rb) parent[ra] = rb
+    }
+    const slotToIdx = new Map<number, number>()
+    for (let i = 0; i < N; i++) slotToIdx.set(list[i]!.slotIndex, i)
+    for (let i = 0; i < N; i++) {
+      const p = list[i]!
+      const sc = p.slotIndex % C
+      const sr = Math.floor(p.slotIndex / C)
+      const pc = p.correctIndex % C
+      const pr = Math.floor(p.correctIndex / C)
+      // right neighbor
+      if (sc < C - 1) {
+        const j = slotToIdx.get(p.slotIndex + 1)
+        if (j != null) {
+          const q = list[j]!
+          const qc = q.correctIndex % C
+          const qr = Math.floor(q.correctIndex / C)
+          if (qr === pr && qc === pc + 1) union(i, j)
+        }
+      }
+      // down neighbor
+      if (sr < R - 1) {
+        const j = slotToIdx.get(p.slotIndex + C)
+        if (j != null) {
+          const q = list[j]!
+          const qc = q.correctIndex % C
+          const qr = Math.floor(q.correctIndex / C)
+          if (qc === pc && qr === pr + 1) union(i, j)
+        }
+      }
+    }
+    const rootPieceId: number[] = new Array(N)
+    for (let i = 0; i < N; i++) rootPieceId[i] = list[find(i)]!.id
+    // alignment per group
+    const alignedMap = new Map<number, boolean>()
+    for (let i = 0; i < N; i++) {
+      const gid = rootPieceId[i]!
+      const p = list[i]!
+      const ok = p.slotIndex === p.correctIndex
+      const prev = alignedMap.get(gid)
+      alignedMap.set(gid, prev === undefined ? ok : prev && ok)
+    }
+    for (let i = 0; i < N; i++) {
+      const p = list[i]!
+      p.groupId = rootPieceId[i]!
+      p.groupAligned = alignedMap.get(p.groupId) === true
+    }
+  }
+
   function init() {
     const grid = pickGrid(opts.pieceCount, boardW, boardH)
     cols.value = grid.cols
@@ -81,8 +159,11 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
       ...p,
       w: cw,
       h: ch,
-      slotIndex: indices[i]!
+      slotIndex: indices[i]!,
+      groupId: p.id,
+      groupAligned: false
     }))
+    recomputeGroups()
     timeLeft.value = calcCountdown(base.length)
     running.value = true
     finished.value = false
@@ -91,17 +172,60 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     startTimer()
   }
 
-  function swapPieces(aId: number, bId: number): boolean {
+  /**
+   * Move an entire group by (dCol, dRow) cells. Returns true on success.
+   * If any destination slot would be outside the board, the move is
+   * rejected and no state changes (caller should bounce back visually).
+   */
+  function moveGroup(pieceId: number, dCol: number, dRow: number): boolean {
     if (!running.value) return false
-    if (aId === bId) return false
-    const a = pieces.value.find((x) => x.id === aId)
-    const b = pieces.value.find((x) => x.id === bId)
-    if (!a || !b) return false
-    const tmp = a.slotIndex
-    a.slotIndex = b.slotIndex
-    b.slotIndex = tmp
+    if (dCol === 0 && dRow === 0) return false
+    const anchor = pieces.value.find((p) => p.id === pieceId)
+    if (!anchor) return false
+    const gid = anchor.groupId
+    const C = cols.value
+    const R = rows.value
+    const groupPieces = pieces.value.filter((p) => p.groupId === gid)
+    const S = new Set<number>()
+    const shifts: { piece: PieceState; newSlot: number }[] = []
+    for (const p of groupPieces) {
+      const c = (p.slotIndex % C) + dCol
+      const r = Math.floor(p.slotIndex / C) + dRow
+      if (c < 0 || c >= C || r < 0 || r >= R) return false
+      shifts.push({ piece: p, newSlot: r * C + c })
+      S.add(p.slotIndex)
+    }
+    const D = new Set<number>(shifts.map((s) => s.newSlot))
+    const displaced = pieces.value
+      .filter((p) => D.has(p.slotIndex) && !S.has(p.slotIndex))
+      .sort((a, b) => a.slotIndex - b.slotIndex)
+    const freeSlots: number[] = []
+    S.forEach((s) => {
+      if (!D.has(s)) freeSlots.push(s)
+    })
+    freeSlots.sort((a, b) => a - b)
+    if (displaced.length !== freeSlots.length) return false
+    for (const s of shifts) s.piece.slotIndex = s.newSlot
+    for (let k = 0; k < displaced.length; k++) {
+      displaced[k]!.slotIndex = freeSlots[k]!
+    }
+    recomputeGroups()
     checkFinished()
     return true
+  }
+
+  /**
+   * Convenience: move an entire group so that one of its pieces lands on
+   * the target slot (used for click-click). Delta is derived from
+   * (targetSlot - anchorPiece.slotIndex).
+   */
+  function moveGroupToSlot(pieceId: number, targetSlot: number): boolean {
+    const anchor = pieces.value.find((p) => p.id === pieceId)
+    if (!anchor) return false
+    const C = cols.value
+    const dCol = (targetSlot % C) - (anchor.slotIndex % C)
+    const dRow = Math.floor(targetSlot / C) - Math.floor(anchor.slotIndex / C)
+    return moveGroup(pieceId, dCol, dRow)
   }
 
   function checkFinished() {
@@ -114,6 +238,11 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     }
   }
 
+  /**
+   * Smart restore: pick up to 3 mispositioned pieces at random and swap
+   * each with the piece currently sitting on its correctIndex. May merge
+   * groups. Groups are recomputed afterwards.
+   */
   function useRestore() {
     if (!running.value) return
     const wrong = pieces.value
@@ -130,6 +259,7 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
       p.slotIndex = occupant.slotIndex
       occupant.slotIndex = tmp
     }
+    recomputeGroups()
     checkFinished()
   }
 
@@ -174,7 +304,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     frozen,
     placedCount,
     init,
-    swapPieces,
+    moveGroup,
+    moveGroupToSlot,
     useRestore,
     useFreeze,
     reviveByAd
