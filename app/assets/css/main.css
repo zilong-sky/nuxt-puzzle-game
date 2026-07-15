@@ -1,0 +1,58 @@
+/* app/assets/css/main.css - 全局样式（极简通用，方便后续换肤） */
+:root {
+  --color-primary: #4f7cff;
+  --color-primary-dark: #3557d1;
+  --color-bg: #f6f8fc;
+  --color-surface: #ffffff;
+  --color-text: #1f2937;
+  --color-text-soft: #6b7280;
+  --color-border: #e5e7eb;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+  --color-success: #10b981;
+  --radius-md: 10px;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-md: 0 6px 20px rgba(0,0,0,0.08);
+}
+
+* { box-sizing: border-box; }
+html, body, #__nuxt { height: 100%; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: var(--color-primary);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  transition: background 0.2s;
+}
+button:hover { background: var(--color-primary-dark); }
+button:disabled { background: #ccc; cursor: not-allowed; }
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.card {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 20px;
+}
+
+@media (max-width: 640px) {
+  .container { padding: 12px; }
+  .card { padding: 14px; }
+}
