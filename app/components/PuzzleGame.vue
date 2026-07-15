@@ -172,6 +172,7 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 720px;
   margin: 0 auto;
+  padding-top: 8px;
 }
 .hud {
   display: flex;
@@ -216,7 +217,7 @@ onBeforeUnmount(() => {
 .board-holder :deep(.puzzle-wrap) {
   width: max(
     calc(var(--puzzle-n, 4) * 50px),
-    min(calc(100vw - 32px), 560px)
+    min(calc(100vw - 32px), calc(100dvh - 240px), 560px)
   );
   max-width: none;
   aspect-ratio: 1 / 1;

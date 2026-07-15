@@ -158,6 +158,18 @@ function fillStyle(p: PieceState): Record<string, string> {
     bgX = props.cols > 1 ? (p.col / (props.cols - 1)) * 100 : 0
     bgY = props.rows > 1 ? (p.row / (props.rows - 1)) * 100 : 0
   }
+  const shadowParts: string[] = []
+  if (ins.t) shadowParts.push('0 -1px 2px rgba(0,0,0,0.15)')
+  if (ins.r) shadowParts.push('1px 0 2px rgba(0,0,0,0.15)')
+  if (ins.b) shadowParts.push('0 1px 2px rgba(0,0,0,0.15)')
+  if (ins.l) shadowParts.push('-1px 0 2px rgba(0,0,0,0.15)')
+  if (p.groupAligned) {
+    if (ins.t) shadowParts.push('0 -3px 8px rgba(212,175,55,0.55)')
+    if (ins.r) shadowParts.push('3px 0 8px rgba(212,175,55,0.55)')
+    if (ins.b) shadowParts.push('0 3px 8px rgba(212,175,55,0.55)')
+    if (ins.l) shadowParts.push('-3px 0 8px rgba(212,175,55,0.55)')
+  }
+  const boxShadow = shadowParts.length ? shadowParts.join(', ') : 'none'
   return {
     top: `${ins.t}px`,
     right: `${ins.r}px`,
@@ -165,7 +177,12 @@ function fillStyle(p: PieceState): Record<string, string> {
     left: `${ins.l}px`,
     backgroundImage: `url(${props.imageUrl})`,
     backgroundSize: `${bgW}% ${bgH}%`,
-    backgroundPosition: `${bgX}% ${bgY}%`
+    backgroundPosition: `${bgX}% ${bgY}%`,
+    boxShadow,
+    borderTopColor: ins.t ? '' : 'transparent',
+    borderRightColor: ins.r ? '' : 'transparent',
+    borderBottomColor: ins.b ? '' : 'transparent',
+    borderLeftColor: ins.l ? '' : 'transparent'
   }
 }
 
@@ -371,10 +388,13 @@ onBeforeUnmount(() => {
   background-repeat: no-repeat;
   background-color: #ccc;
   border-radius: 2px;
-  transition: outline-color 0.15s ease, box-shadow 0.15s ease;
+  transition: outline-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   outline: 2px solid transparent;
   outline-offset: -2px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  border-width: 2px;
+  border-style: solid;
+  border-color: transparent;
+  box-sizing: border-box;
 }
 .piece-fill.rotated {
   transform: rotate(90deg);
@@ -385,7 +405,6 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 12px rgba(245, 196, 81, 0.8);
 }
 .piece.group-aligned .piece-fill {
-  outline-color: #d4af37;
-  box-shadow: 0 0 10px rgba(212, 175, 55, 0.55);
+  border-color: #d4af37;
 }
 </style>
