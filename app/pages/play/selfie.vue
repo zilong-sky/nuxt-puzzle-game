@@ -70,18 +70,17 @@
       </template>
     </ModalDialog>
 
-    <!-- 单张通关后：完成 + 是否上传（唯一完成弹窗） -->
-    <ModalDialog :visible="askUpload" title="🎉 完成拼图" :closable="false">
-      <p>你成功拼完了这张自拍！</p>
-      <p>是否将这张图片推荐到云图库？通过审核后其他玩家将能在云冒险中玩到它。</p>
-      <template #footer>
-        <div class="stack-btns">
-          <button class="primary-btn" @click="doUpload">☁️ 上传到云图库</button>
-          <button class="ghost-btn" @click="skipUpload">{{ hasNext ? '暂不上传，下一张' : '暂不上传' }}</button>
-          <button class="ghost-btn" @click="onAbort">返回主页</button>
+    <!-- 单张通关后：完成 + 是否上传（底部悬浮条，不遮欣赏图） -->
+    <Transition name="upbar">
+      <div v-if="askUpload" class="upload-bar">
+        <div class="upload-bar-title">🎉 拼完了！想把这张推荐到云图库吗？</div>
+        <div class="upload-bar-btns">
+          <button class="primary-btn" @click="doUpload">☁️ 上传</button>
+          <button class="ghost-btn" @click="skipUpload">{{ hasNext ? '跳过·下一张' : '跳过' }}</button>
+          <button class="ghost-btn" @click="onAbort">返回</button>
         </div>
-      </template>
-    </ModalDialog>
+      </div>
+    </Transition>
 
     <!-- 上传中弹窗 -->
     <ModalDialog :visible="uploadState === 'uploading' || uploadState === 'compressing'" :title="uploadState === 'compressing' ? '🗜 处理图片中' : '☁️ 上传中'" :closable="false">
@@ -489,4 +488,25 @@ onBeforeUnmount(() => {
 .toast-enter-active, .toast-leave-active { transition: all 0.3s ease; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(20px); }
 .upload-progress .progress-num { font-size: 13px; color: var(--color-text-soft); }
+
+/* 底部悬浮上传条 */
+.upload-bar {
+  position: fixed;
+  left: 12px; right: 12px; bottom: 12px;
+  z-index: 90;
+  background: rgba(255,255,255,0.98);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.18);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  max-width: 520px; margin: 0 auto;
+}
+.upload-bar-title { font-size: 14px; font-weight: 600; color: var(--color-text); text-align: center; }
+.upload-bar-btns { display: flex; gap: 8px; }
+.upload-bar-btns button { flex: 1; padding: 10px; border-radius: 8px; font-size: 14px; cursor: pointer; border: none; }
+.upload-bar-btns .primary-btn { background: var(--color-primary, #4a7cff); color: #fff; flex: 1.5; }
+.upload-bar-btns .ghost-btn { background: #f3f4f6; color: var(--color-text); border: 1px solid var(--color-border); }
+.upbar-enter-active, .upbar-leave-active { transition: all 0.25s ease; }
+.upbar-enter-from, .upbar-leave-to { opacity: 0; transform: translateY(20px); }
 </style>
