@@ -297,7 +297,6 @@ function onNext() {
   askUpload.value = false
   if (hasNext.value) {
     idx.value += 1
-    pieceCount.value = Math.min(randInt(30, 80), maxPieces.value)
   } else {
     gameStarted.value = false
     images.value = []
