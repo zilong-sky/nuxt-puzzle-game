@@ -105,15 +105,27 @@
       </template>
     </ModalDialog>
 
-    <!-- 上传成功弹窗 -->
-    <ModalDialog :visible="uploadState === 'success'" title="✅ 上传成功" :closable="false">
-      <p>{{ uploadSuccessMsg }}</p>
+    <!-- 上传成功弹窗（大绿勾，禁用遮罩关闭） -->
+    <ModalDialog :visible="uploadState === 'success'" :closable="false">
+      <div class="success-hero">
+        <div class="check-badge">✓</div>
+        <h3 class="success-title">上传成功！</h3>
+        <p class="success-desc">{{ uploadSuccessMsg }}</p>
+        <p class="success-id" v-if="uploadedId">编号 #{{ uploadedId }}</p>
+      </div>
       <template #footer>
         <div class="stack-btns">
           <button class="primary-btn" @click="afterUploadDone">{{ hasNext ? '下一张' : '完成' }}</button>
         </div>
       </template>
     </ModalDialog>
+
+    <!-- 持续提示 toast（成功后停留在页面右上） -->
+    <Transition name="toast">
+      <div v-if="successToast" class="success-toast">
+        ✅ 已提交云图库审核
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -150,6 +162,8 @@ const uploadState = ref<UploadState>('idle')
 const uploadProgress = ref(0)
 const uploadError = ref('')
 const uploadSuccessMsg = ref('')
+const uploadedId = ref<number | null>(null)
+const successToast = ref(false)
 
 const imgDim = ref<{ w: number; h: number } | null>(null)
 const viewportTick = ref(0)
@@ -331,7 +345,11 @@ async function doUpload() {
 
     if (result.success) {
       uploadSuccessMsg.value = result.message || '已提交，审核通过后会出现在云冒险'
+      uploadedId.value = result.id ?? null
       uploadState.value = 'success'
+      // 显示 toast，5 秒后自动隐藏
+      successToast.value = true
+      setTimeout(() => { successToast.value = false }, 5000)
     } else {
       uploadError.value = result.error || '未知错误（服务端未返回错误信息）'
       console.error('[selfie upload] failed:', result)
@@ -354,6 +372,7 @@ function giveUpUpload() {
 function afterUploadDone() {
   uploadState.value = 'idle'
   uploadSuccessMsg.value = ''
+  uploadedId.value = null
   onNext()
 }
 
@@ -429,5 +448,36 @@ onBeforeUnmount(() => {
 .primary-btn { background: var(--color-primary, #4a7cff); color: #fff; border: none; }
 .primary-btn:hover { opacity: 0.9; }
 .err-msg { color: #e34a4a; background: #fef2f2; padding: 8px 10px; border-radius: 6px; font-size: 13px; word-break: break-word; margin: 6px 0; }
+
+/* 成功弹窗 */
+.success-hero { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 12px 0 4px; }
+.check-badge {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: linear-gradient(135deg, #4ade80, #22c55e);
+  color: #fff; font-size: 44px; font-weight: bold;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 6px 20px rgba(34,197,94,0.35);
+  margin-bottom: 12px;
+  animation: pop-badge 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes pop-badge {
+  0% { transform: scale(0.3); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.success-title { font-size: 20px; font-weight: 600; color: #16a34a; margin: 0 0 6px; }
+.success-desc { font-size: 14px; color: var(--color-text); margin: 0; }
+.success-id { font-size: 12px; color: var(--color-text-soft); margin: 8px 0 0; font-family: monospace; }
+
+/* 右上角持续 toast */
+.success-toast {
+  position: fixed; top: 20px; right: 20px; z-index: 200;
+  background: #22c55e; color: #fff;
+  padding: 10px 16px; border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(34,197,94,0.4);
+  font-size: 14px; font-weight: 500;
+  max-width: calc(100vw - 40px);
+}
+.toast-enter-active, .toast-leave-active { transition: all 0.3s ease; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(20px); }
 .upload-progress .progress-num { font-size: 13px; color: var(--color-text-soft); }
 </style>
