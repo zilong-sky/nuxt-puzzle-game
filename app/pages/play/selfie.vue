@@ -49,6 +49,7 @@
         mode-label="📷 自拍上传"
         :show-score="false"
         :next-label="hasNext ? '下一张' : '完成'"
+        hide-success-modal
         @success="onSuccess"
         @fail="onFail"
         @abort="onAbort"
@@ -68,12 +69,14 @@
       </template>
     </ModalDialog>
 
-    <!-- 单张通关后：推荐上传弹窗 -->
-    <ModalDialog :visible="askUpload" title="🎉 完成拼图" closable @close="askUpload = false">
-      <p>是否将这张自拍推荐到云图库？其他玩家将能在云冒险模式中玩到它。</p>
+    <!-- 单张通关后：完成 + 是否上传（唯一完成弹窗） -->
+    <ModalDialog :visible="askUpload" title="🎉 完成拼图" :closable="false">
+      <p>你成功拼完了这张自拍！</p>
+      <p>是否将这张图片推荐到云图库？通过审核后其他玩家将能在云冒险中玩到它。</p>
       <template #footer>
-        <button class="ghost-btn" @click="skipUpload">暂不上传</button>
-        <button @click="doUpload">☁️ 上传到云图库</button>
+        <button class="ghost-btn" @click="onAbort">返回</button>
+        <button class="ghost-btn" @click="skipUpload">{{ hasNext ? '暂不上传，下一张' : '暂不上传' }}</button>
+        <button @click="doUpload">☁️ 上传</button>
       </template>
     </ModalDialog>
 
@@ -242,7 +245,10 @@ function startGame() {
 
 function onSuccess() { askUpload.value = true }
 function onFail() { /* 交由内部弹窗处理，此处保留埋点位置 */ }
-function onAbort() { gameStarted.value = false }
+function onAbort() {
+  askUpload.value = false
+  gameStarted.value = false
+}
 
 function onNext() {
   askUpload.value = false
@@ -272,7 +278,7 @@ async function doUpload() {
   uploadProgress.value = 0
   try {
     const dataUrl = images.value[idx.value]
-    if (!dataUrl) throw new Error('???????')
+    if (!dataUrl) throw new Error('图片数据丢失')
     const rawBlob = await dataUrlToBlob(dataUrl)
     const { blob: compressed, width, height } = await compressImage(rawBlob)
     const fingerprint = await getFingerprint()
@@ -284,9 +290,9 @@ async function doUpload() {
     )
     uploading.value = false
     if (result.success) {
-      alert(result.message || '? ????????????????')
+      alert(result.message || '✅ 已提交，审核通过后会出现在云冒险')
     } else {
-      alert('? ' + (result.error || '????'))
+      alert('❌ ' + (result.error || '上传失败'))
     }
   } catch (e) {
     uploading.value = false

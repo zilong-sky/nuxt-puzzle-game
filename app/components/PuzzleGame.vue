@@ -69,7 +69,7 @@
       <button class="ghost-btn" @click="$emit('abort')">退出本局</button>
     </div>
 
-    <ModalDialog :visible="finished" title="🎉 拼图完成" :closable="false">
+    <ModalDialog :visible="finished && !hideSuccessModal" title="🎉 拼图完成" :closable="false">
       <p>你成功拼完了这张图片！</p>
       <p v-if="showScore">本局得分：<strong>{{ placedCount }}</strong> 分</p>
       <template #footer>
@@ -105,6 +105,7 @@ const props = defineProps<{
   modeLabel: string
   showScore?: boolean
   nextLabel?: string
+  hideSuccessModal?: boolean
 }>()
 const emit = defineEmits<{ success: [score: number]; fail: []; abort: []; next: [] }>()
 
