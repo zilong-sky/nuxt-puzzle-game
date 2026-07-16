@@ -55,11 +55,11 @@
     </div>
 
     <div class="items card" ref="itemsRef">
-      <template v-if="finished">
+      <template v-if="finished && !hideFinishActions">
         <button class="ghost-btn" @click="$emit('abort')">返回</button>
         <button class="next-big" @click="$emit('next')">{{ nextLabel }} →</button>
       </template>
-      <template v-else>
+      <template v-else-if="!finished">
         <button
           class="item-btn"
           :disabled="!running || roundItems.restore <= 0"
@@ -123,6 +123,7 @@ const props = defineProps<{
   showScore?: boolean
   nextLabel?: string
   hideSuccessModal?: boolean
+  hideFinishActions?: boolean
 }>()
 const emit = defineEmits<{ success: [score: number]; fail: []; abort: []; next: [] }>()
 

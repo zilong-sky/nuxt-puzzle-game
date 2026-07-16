@@ -51,6 +51,7 @@
         :show-score="false"
         :next-label="hasNext ? '下一张' : '完成'"
         hide-success-modal
+        hide-finish-actions
         @success="onSuccess"
         @fail="onFail"
         @abort="onAbort"
