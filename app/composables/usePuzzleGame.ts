@@ -60,6 +60,7 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   const frozen = ref(false)
   const loading = ref(true)
   const loadProgress = ref(0)
+  const roundItems = ref({ restore: 1, freeze: 1, replay: 1 })
 
   let timerId: ReturnType<typeof setInterval> | null = null
   let freezeTimeoutId: ReturnType<typeof setTimeout> | null = null
@@ -153,6 +154,10 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
   }
 
   async function init() {
+    finished.value = false
+    failed.value = false
+    running.value = false
+    roundItems.value = { restore: 1, freeze: 1, replay: 1 }
     loading.value = true
     loadProgress.value = 0
 
@@ -360,6 +365,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
 
   function useRestore() {
     if (!running.value) return
+    if (roundItems.value.restore <= 0) return
+    roundItems.value.restore -= 1
     const wrong = pieces.value
       .filter((p) => p.slotIndex !== p.correctIndex)
       .sort(() => Math.random() - 0.5)
@@ -380,6 +387,8 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
 
   function useFreeze() {
     if (!running.value) return
+    if (roundItems.value.freeze <= 0) return
+    roundItems.value.freeze -= 1
     frozen.value = true
     if (freezeTimeoutId) clearTimeout(freezeTimeoutId)
     freezeTimeoutId = setTimeout(() => {
@@ -394,6 +403,28 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     timeLeft.value = calcCountdown(pieces.value.length)
     startTimer()
   }
+
+  function restart() {
+    if (roundItems.value.replay <= 0) return
+    roundItems.value.replay -= 1
+    const list = pieces.value
+    if (list.length <= 1) return
+    let indices = list.map((p) => p.slotIndex)
+    let tries = 0
+    do {
+      indices = shufflePieces(indices)
+      tries++
+    } while (indices.every((v, i) => v === list[i]!.slotIndex) && tries < 5)
+    for (let i = 0; i < list.length; i++) list[i]!.slotIndex = indices[i]!
+    recomputeGroups()
+    finished.value = false
+    failed.value = false
+    running.value = true
+    frozen.value = false
+    timeLeft.value = calcCountdown(list.length)
+    startTimer()
+  }
+  const useReplay = () => restart()
 
   const placedCount = computed(
     () => pieces.value.filter((p) => p.slotIndex === p.correctIndex).length
@@ -422,11 +453,14 @@ export function usePuzzleGame(opts: UsePuzzleOptions) {
     placedCount,
     loading,
     loadProgress,
+    roundItems,
     init,
     moveGroup,
     moveGroupToSlot,
     useRestore,
     useFreeze,
-    reviveByAd
+    reviveByAd,
+    useReplay,
+    restart
   }
 }

@@ -34,6 +34,7 @@ const isPlay = computed(() => route.path.startsWith('/play'))
 }
 .main-content.is-play {
   padding: 8px 12px;
+  min-height: 100dvh;
 }
 @media (max-width: 640px) {
   .main-content { padding: 12px; }

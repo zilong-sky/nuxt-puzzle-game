@@ -1,10 +1,10 @@
-<!-- app/pages/play/cloud.vue - 云冒险模式：按上传时间顺序，含计分/排行/次数限制 -->
+<!-- app/pages/play/cloud.vue - 冒险模式：暂用休闲图池，顺序固定 + 全局进度持久化 -->
 <template>
   <div v-if="current">
     <PuzzleGame
       :image-url="current.url"
       :piece-count="pieceCount"
-      :mode-label="`☁️ 云冒险 · ${current.uploader ?? '匿名'}`"
+      :mode-label="`☁️ 云冒险 · 第 ${idx + 1} 关`"
       :show-score="true"
       next-label="下一张"
       @success="onSuccess"
@@ -32,7 +32,7 @@ import { computed, onMounted, ref } from 'vue'
 import PuzzleGame from '~/components/PuzzleGame.vue'
 import ModalDialog from '~/components/ModalDialog.vue'
 import AdModal from '~/components/AdModal.vue'
-import { fetchCloudImages, type PuzzleImage } from '~/services/imageService'
+import { fetchCasualImages, type PuzzleImage } from '~/services/imageService'
 import { submitScore } from '~/services/rankService'
 import { useGameStore } from '~/stores/gameStore'
 import { randInt } from '~/utils/random'
@@ -40,30 +40,32 @@ import { randInt } from '~/utils/random'
 const game = useGameStore()
 const list = ref<PuzzleImage[]>([])
 const idx = ref(0)
-const pieceCount = ref(randInt(30, 200))
+const pieceCount = ref(randInt(30, 80))
 const noPlays = ref(false)
 const adVisible = ref(false)
 
 const current = computed(() => list.value[idx.value])
 
 onMounted(async () => {
+  if (typeof window !== 'undefined') window.scrollTo(0, 0)
   game.hydrate()
   if (!game.canPlayCloud) {
     noPlays.value = true
     return
   }
-  // 本次云冒险入口消耗一次
   game.consumeCloudPlay()
-  list.value = await fetchCloudImages()
-  pieceCount.value = randInt(30, 200)
+  list.value = await fetchCasualImages()
+  if (list.value.length > 0) {
+    idx.value = Math.min(game.adventureIdx, list.value.length - 1)
+  }
+  pieceCount.value = randInt(30, 80)
 })
 
 function onSuccess(score: number) {
   game.submitCloudScore(score)
-  // 后续对接后端修改此处：submitScore 目前为 mock，可发送真实上报
   submitScore(score)
 }
-function onFail() { /* 交由 PuzzleGame 内部弹窗处理 */ }
+function onFail() { /* 由 PuzzleGame 内部弹窗处理 */ }
 function loadNext() {
   if (!game.canPlayCloud) {
     noPlays.value = true
@@ -71,7 +73,8 @@ function loadNext() {
   }
   game.consumeCloudPlay()
   idx.value = (idx.value + 1) % list.value.length
-  pieceCount.value = randInt(30, 200)
+  game.setAdventureIdx(idx.value)
+  pieceCount.value = randInt(30, 80)
 }
 function onAbort() { goHome() }
 function goHome() { navigateTo('/') }
@@ -80,17 +83,15 @@ function onAdDone() {
   adVisible.value = false
   game.grantExtraPlay()
   noPlays.value = false
-  // 消耗刚刚获得的次数并继续
   game.consumeCloudPlay()
   loadNextAfterReward()
 }
 function loadNextAfterReward() {
   if (!list.value.length) {
-    fetchCloudImages().then((l) => { list.value = l })
+    fetchCasualImages().then((l) => { list.value = l })
   }
 }
 function onUnlockPremium() {
-  // 后续对接后端修改此处：应先跳转支付流程，成功后再解锁
   game.unlockPremium()
   noPlays.value = false
 }

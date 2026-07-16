@@ -76,6 +76,16 @@
         <button @click="doUpload">☁️ 上传到云图库</button>
       </template>
     </ModalDialog>
+
+    <!-- 假上传进度弹窗 -->
+    <ModalDialog :visible="uploading" title="☁️ 上传中" :closable="false">
+      <div class="upload-progress">
+        <div class="progress-track">
+          <div class="progress-fill" :style="{ width: uploadProgress + '%' }"></div>
+        </div>
+        <div class="progress-num">{{ uploadProgress }}%</div>
+      </div>
+    </ModalDialog>
   </div>
 </template>
 
@@ -84,7 +94,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PuzzleGame from '~/components/PuzzleGame.vue'
 import ModalDialog from '~/components/ModalDialog.vue'
 import DifficultyDial from '~/components/DifficultyDial.vue'
-import { uploadImage } from '~/services/imageService'
 import { randInt } from '~/utils/random'
 import { computeMaxPieces } from '~/utils/difficultyLimit'
 
@@ -102,6 +111,8 @@ const canvasEl = ref<HTMLCanvasElement | null>(null)
 let stream: MediaStream | null = null
 
 const askUpload = ref(false)
+const uploading = ref(false)
+const uploadProgress = ref(0)
 
 const imgDim = ref<{ w: number; h: number } | null>(null)
 const viewportTick = ref(0)
@@ -245,14 +256,26 @@ function skipUpload() {
 }
 
 async function doUpload() {
-  const blob = await (await fetch(current.value)).blob()
-  await uploadImage(blob)
   askUpload.value = false
+  uploading.value = true
+  uploadProgress.value = 0
+  await new Promise<void>((resolve) => {
+    const start = Date.now()
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - start
+      const pct = Math.min(100, Math.round((elapsed / 3000) * 100))
+      uploadProgress.value = pct
+      if (pct >= 100) { clearInterval(timer); resolve() }
+    }, 60)
+  })
+  // TODO: 真实上传接口就绪后替换为 uploadImage(blob)
+  uploading.value = false
   onNext()
 }
 
 let viewportHandler: (() => void) | null = null
 onMounted(() => {
+  if (typeof window !== 'undefined') window.scrollTo(0, 0)
   viewportHandler = () => { viewportTick.value++ }
   window.addEventListener('resize', viewportHandler)
   window.addEventListener('orientationchange', viewportHandler)
@@ -313,4 +336,8 @@ onBeforeUnmount(() => {
 .actions { display: flex; gap: 10px; }
 .ghost-btn { background: transparent; color: var(--color-text); border: 1px solid var(--color-border); }
 .cam-wrap video { width: 100%; border-radius: 6px; background: #000; }
+.upload-progress { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; }
+.upload-progress .progress-track { width: 220px; height: 8px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
+.upload-progress .progress-fill { height: 100%; background: #d4af37; transition: width 0.12s linear; }
+.upload-progress .progress-num { font-size: 13px; color: var(--color-text-soft); }
 </style>

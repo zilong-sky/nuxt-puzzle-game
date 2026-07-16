@@ -23,7 +23,7 @@
           <span>历史最高：<b>{{ game.highScore }}</b></span>
           <span>今日剩余：<b>{{ game.premium ? '∞' : game.dailyPlaysLeft }}</b> / 5</span>
         </div>
-        <button>了解并开始</button>
+        <button class="big-start-btn">了解并开始</button>
       </div>
       <div class="mode-card card" @click="goSelfie">
         <div class="ico">📸</div>
@@ -51,7 +51,7 @@
       </ul>
       <template #footer>
         <button class="ghost-btn" @click="showCloudTip = false">取消</button>
-        <button :disabled="!game.canPlayCloud" @click="goCloud">
+        <button class="big-start-btn" :disabled="!game.canPlayCloud" @click="goCloud">
           {{ game.canPlayCloud ? '进入云冒险' : '今日次数已用完' }}
         </button>
       </template>
@@ -101,6 +101,19 @@ function goSelfie() { navigateTo('/play/selfie') }
 .ghost-btn { background: transparent; color: var(--color-text); border: 1px solid var(--color-border); }
 .ghost-btn:hover { background: #f3f4f6; }
 
+.big-start-btn {
+  display: block;
+  margin: 12px auto 0;
+  padding: 12px 32px;
+  font-size: 16px;
+  font-weight: 600;
+  min-width: 180px;
+  border-radius: 10px;
+  background: var(--color-primary);
+  color: #fff;
+  border: none;
+}
+.big-start-btn:disabled { background: #cbd5e1; color: #fff; cursor: not-allowed; }
 @media (max-width: 720px) {
   .modes { grid-template-columns: 1fr; }
 }

@@ -47,17 +47,24 @@
     <div class="items card" ref="itemsRef">
       <button
         class="item-btn"
-        :disabled="!running || game.items.restore <= 0"
+        :disabled="!running || roundItems.restore <= 0"
         @click="doRestore"
       >
-        🧠 智能还原 × {{ game.items.restore }}
+        🧠 智能还原 × {{ roundItems.restore }}
       </button>
       <button
         class="item-btn"
-        :disabled="!running || game.items.freeze <= 0 || frozen"
+        :disabled="!running || roundItems.freeze <= 0 || frozen"
         @click="doFreeze"
       >
-        ❄️ 时间冻结 × {{ game.items.freeze }}
+        ❄️ 时间冻结 × {{ roundItems.freeze }}
+      </button>
+      <button
+        class="item-btn"
+        :disabled="!running || roundItems.replay <= 0"
+        @click="doReplay"
+      >
+        🔄 重玩本局 × {{ roundItems.replay }}
       </button>
       <button class="ghost-btn" @click="$emit('abort')">退出本局</button>
     </div>
@@ -89,7 +96,6 @@ import PuzzleBoard from './PuzzleBoard.vue'
 import ModalDialog from './ModalDialog.vue'
 import AdModal from './AdModal.vue'
 import { usePuzzleGame } from '~/composables/usePuzzleGame'
-import { useGameStore } from '~/stores/gameStore'
 import { formatTime } from '~/utils/time'
 import { playRewardAd } from '~/services/adService'
 
@@ -102,14 +108,13 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ success: [score: number]; fail: []; abort: []; next: [] }>()
 
-const game = useGameStore()
-
 const {
   cols, rows, aspect, renderImageUrl,
   pieces, timeLeft, running, finished, failed, frozen,
   placedCount,
   loading, loadProgress,
-  init, moveGroup, moveGroupToSlot, useRestore, useFreeze, reviveByAd
+  roundItems,
+  init, moveGroup, moveGroupToSlot, useRestore, useFreeze, useReplay, reviveByAd
 } = usePuzzleGame({
   imageUrl: props.imageUrl,
   pieceCount: props.pieceCount,
@@ -122,6 +127,10 @@ const nextLabel = props.nextLabel ?? '下一张'
 
 onMounted(() => {
   init()
+  if (typeof window !== 'undefined') {
+    window.scrollTo({ top: 0, behavior: 'auto' })
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
+  }
 })
 
 watch(
@@ -135,12 +144,9 @@ function onMoveGroup(pieceId: number, dCol: number, dRow: number) {
 function onMoveGroupToSlot(pieceId: number, targetSlot: number) {
   moveGroupToSlot(pieceId, targetSlot)
 }
-function doRestore() {
-  if (game.useItem('restore')) useRestore()
-}
-function doFreeze() {
-  if (game.useItem('freeze')) useFreeze()
-}
+function doRestore() { useRestore() }
+function doFreeze() { useFreeze() }
+function doReplay() { useReplay() }
 function watchReviveAd() {
   adVisible.value = true
   playRewardAd()
@@ -154,7 +160,6 @@ function onAdDone() {
 const hudRef = ref<HTMLElement | null>(null)
 const itemsRef = ref<HTMLElement | null>(null)
 
-/** Tick bumped on viewport changes so wrapSize recomputes. */
 const viewportTick = ref(0)
 function onViewportChange() { viewportTick.value++ }
 
@@ -240,7 +245,7 @@ onBeforeUnmount(() => {
   position: relative;
   display: flex;
   justify-content: center;
-  padding: 0 16px; /* 16px safe margin on both sides */
+  padding: 0 16px;
   width: 100%;
 }
 .loading-overlay {
@@ -313,5 +318,3 @@ onBeforeUnmount(() => {
   .item-btn, .ghost-btn { font-size: 12px; padding: 6px 8px; }
 }
 </style>
-
-

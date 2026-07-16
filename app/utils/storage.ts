@@ -30,10 +30,11 @@ export function removeItem(key: string): void {
 }
 
 export const STORAGE_KEYS = {
-  DAILY_PLAYS: 'puzzle_daily_plays',      // 云冒险每日剩余次数
-  DAILY_DATE: 'puzzle_daily_date',        // 记录日期，跨天重置
-  HIGH_SCORE: 'puzzle_high_score',        // 云冒险最高分
-  RANK_HISTORY: 'puzzle_rank_history',    // 云冒险每一局得分历史
-  ITEMS: 'puzzle_items',                  // 道具数量
-  PREMIUM: 'puzzle_premium'               // 是否永久解锁
+  DAILY_PLAYS: 'puzzle_daily_plays',
+  DAILY_DATE: 'puzzle_daily_date',
+  HIGH_SCORE: 'puzzle_high_score',
+  RANK_HISTORY: 'puzzle_rank_history',
+  ITEMS: 'puzzle_items',
+  PREMIUM: 'puzzle_premium',
+  ADV_IDX: 'puzzle:adv-idx'
 } as const
