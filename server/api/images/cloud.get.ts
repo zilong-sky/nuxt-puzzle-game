@@ -2,7 +2,7 @@
 
 export default defineEventHandler(async () => {
   const { rows } = await sql`
-    SELECT id, seq, code, url, uploader, uploaded_at
+    SELECT id, seq, code, url, uploader, uploaded_at, piece_count
     FROM cloud_images
     WHERE status='approved'
     ORDER BY seq ASC
@@ -13,6 +13,7 @@ export default defineEventHandler(async () => {
     title: r.code,
     code: r.code,
     uploader: r.uploader,
-    uploadedAt: Number(r.uploaded_at)
+    uploadedAt: Number(r.uploaded_at),
+    pieceCount: r.piece_count ?? null
   }))
 })

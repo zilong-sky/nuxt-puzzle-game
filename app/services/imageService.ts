@@ -10,6 +10,7 @@ export interface PuzzleImage {
   code?: string
   uploader?: string
   uploadedAt?: number
+  pieceCount?: number | null
 }
 
 /** 休闲模式：picsum seeds 30 张（保持不变） */
@@ -34,9 +35,9 @@ export async function fetchCloudImages(): Promise<PuzzleImage[]> {
 /** 用 XHR 上传以获取真实进度。 */
 export function uploadImage(
   file: Blob,
-  meta: { uploader: string; fingerprint: string; width: number; height: number },
+  meta: { uploader: string; fingerprint: string; width: number; height: number; pieceCount: number },
   onProgress?: (pct: number) => void
-): Promise<{ success: boolean; id?: number; message?: string; error?: string }> {
+): Promise<{ success: boolean; id?: number; message?: string; error?: string; used?: number; limit?: number }> {
   return new Promise((resolve) => {
     const fd = new FormData()
     fd.append('file', file, 'selfie.jpg')
@@ -44,6 +45,7 @@ export function uploadImage(
     fd.append('fingerprint', meta.fingerprint)
     fd.append('width', String(meta.width))
     fd.append('height', String(meta.height))
+    fd.append('pieceCount', String(meta.pieceCount))
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api/images/upload')
     xhr.upload.onprogress = (e) => {
@@ -55,9 +57,9 @@ export function uploadImage(
       try {
         const data = JSON.parse(xhr.responseText || '{}')
         if (xhr.status >= 200 && xhr.status < 300 && data.success) {
-          resolve({ success: true, id: data.id, message: data.message })
+          resolve({ success: true, id: data.id, message: data.message, used: data.used, limit: data.limit })
         } else {
-          resolve({ success: false, error: data.error || `HTTP ${xhr.status}` })
+          resolve({ success: false, error: data.error || `HTTP ${xhr.status}`, used: data.used, limit: data.limit })
         }
       } catch {
         resolve({ success: false, error: '响应解析失败' })

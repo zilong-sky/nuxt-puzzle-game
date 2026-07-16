@@ -83,8 +83,17 @@ onMounted(async () => {
   }
   game.consumeCloudPlay()
   idx.value = Math.min(game.adventureIdx, list.value.length - 1)
-  pieceCount.value = randInt(30, 80)
+  applyPieceCount()
 })
+
+function applyPieceCount() {
+  const img = list.value[idx.value]
+  if (img && typeof img.pieceCount === 'number' && img.pieceCount >= 4) {
+    pieceCount.value = img.pieceCount
+  } else {
+    pieceCount.value = randInt(30, 80)
+  }
+}
 
 async function reportScore(score: number) {
   try {
@@ -118,7 +127,7 @@ function loadNext() {
     idx.value += 1
   }
   game.setAdventureIdx(idx.value)
-  pieceCount.value = randInt(30, 80)
+  applyPieceCount()
 }
 function onAbort() { goHome() }
 function goHome() { navigateTo('/') }

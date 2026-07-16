@@ -85,11 +85,12 @@
 
     <!-- 上传前确认弹窗 -->
     <ModalDialog :visible="confirmUpload" title="☁️ 上传确认" :closable="false">
-      <p>每天最多只能上传 <strong>3 张</strong> 图片到云图库。</p>
-      <p>确定要上传这张吗？</p>
+      <p>每个人（浏览器指纹）<strong>累计只能上传 3 张</strong>到云图库，请谨慎挑选。</p>
+      <p>你已经上传：<strong>{{ quotaUsed }} / {{ quotaLimit }}</strong>{{ quotaRemaining > 0 ? '，剩余 ' + quotaRemaining + ' 次' : '，额度已用完' }}</p>
+      <p v-if="quotaRemaining > 0">当前图片难度 <strong>{{ pieceCount }} 块</strong>，上传后审核通过将以此难度出现在冒险模式。</p>
       <template #footer>
         <div class="stack-btns">
-          <button class="primary-btn" @click="confirmDoUpload">确定上传</button>
+          <button v-if="quotaRemaining > 0" class="primary-btn" @click="confirmDoUpload">确定上传</button>
           <button class="ghost-btn" @click="confirmUpload = false">取消</button>
         </div>
       </template>
@@ -171,6 +172,18 @@ let stream: MediaStream | null = null
 
 const askUpload = ref(false)
 const confirmUpload = ref(false)
+const quotaUsed = ref(0)
+const quotaLimit = ref(3)
+const quotaRemaining = computed(() => Math.max(0, quotaLimit.value - quotaUsed.value))
+
+async function refreshQuota() {
+  try {
+    const fp = await getFingerprint()
+    const r = await $fetch<{ used: number; limit: number; remaining: number }>('/api/images/quota', { params: { fingerprint: fp } })
+    quotaUsed.value = r.used
+    quotaLimit.value = r.limit
+  } catch { /* ignore */ }
+}
 type UploadState = 'idle' | 'compressing' | 'uploading' | 'failed' | 'success'
 const uploadState = ref<UploadState>('idle')
 const uploadProgress = ref(0)
@@ -328,8 +341,8 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 }
 
 async function doUpload() {
-  // 先弹确认框，用户点"确定"再真正上传
   if (uploadState.value === 'compressing' || uploadState.value === 'uploading') return
+  await refreshQuota()
   confirmUpload.value = true
 }
 
@@ -357,12 +370,14 @@ async function confirmDoUpload() {
 
     const result = await uploadImage(
       compressed,
-      { uploader, fingerprint, width, height },
+      { uploader, fingerprint, width, height, pieceCount: pieceCount.value },
       (pct) => { uploadProgress.value = pct }
     )
 
     console.log('[selfie upload] result:', result)
     if (result.success) {
+      if (typeof result.used === 'number') quotaUsed.value = result.used
+      if (typeof result.limit === 'number') quotaLimit.value = result.limit
       uploadSuccessMsg.value = result.message || '已提交，审核通过后会出现在云冒险'
       uploadedId.value = result.id ?? null
       uploadState.value = 'success'
@@ -408,6 +423,7 @@ onMounted(() => {
   viewportHandler = () => { viewportTick.value++ }
   window.addEventListener('resize', viewportHandler)
   window.addEventListener('orientationchange', viewportHandler)
+  refreshQuota()
   try {
     const raw = localStorage.getItem(CACHE_KEY)
     if (raw) {
