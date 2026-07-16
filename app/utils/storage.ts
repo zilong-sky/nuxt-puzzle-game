@@ -37,5 +37,6 @@ export const STORAGE_KEYS = {
   ITEMS: 'puzzle_items',
   PREMIUM: 'puzzle_premium',
   ADV_IDX: 'puzzle:adv-idx',
-  PLAYER_NAME: 'puzzle:player-name'
+  PLAYER_NAME: 'puzzle:player-name',
+  PAID_PLAYS_USED: 'puzzle:paid-plays-used'
 } as const

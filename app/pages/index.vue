@@ -12,7 +12,7 @@
       <div class="mode-card card" @click="goCasual">
         <div class="ico">🌿</div>
         <h3>休闲模式</h3>
-        <p>随图库编号顺序自动加载，30~80 块不规则异形切割，纯放松，不计分。</p>
+        <p>自选难度区间（最低 ~ 最高），每张图在区间内随机切块，纯放松，不计分。</p>
         <button>开始休闲</button>
       </div>
       <div class="mode-card card highlight" @click="showCloudTip = true">
@@ -51,9 +51,13 @@
       </ul>
       <template #footer>
         <button class="ghost-btn" @click="showCloudTip = false">取消</button>
-        <button class="big-start-btn" :disabled="!game.canPlayCloud" @click="goCloud">
-          {{ game.canPlayCloud ? '进入云冒险' : '今日次数已用完' }}
+        <button v-if="game.canPlayCloud" class="big-start-btn" @click="goCloud">
+          进入云冒险
         </button>
+        <template v-else>
+          <button class="big-start-btn" disabled>免费次数已用完</button>
+          <button class="big-start-btn pay" @click="goCloudPaid">💰 付费玩 ¥{{ game.nextPaidPrice }}</button>
+        </template>
       </template>
     </ModalDialog>
   </div>
@@ -71,6 +75,10 @@ onMounted(() => game.hydrate())
 function goCasual() { navigateTo('/play/casual') }
 function goCloud() {
   if (!game.canPlayCloud) return
+  navigateTo('/play/cloud')
+}
+function goCloudPaid() {
+  // 进入 cloud 页，noPlays 弹窗会自动弹出，让用户走付费确认流程
   navigateTo('/play/cloud')
 }
 function goSelfie() { navigateTo('/play/selfie') }
@@ -114,6 +122,8 @@ function goSelfie() { navigateTo('/play/selfie') }
   border: none;
 }
 .big-start-btn:disabled { background: #cbd5e1; color: #fff; cursor: not-allowed; }
+.big-start-btn.pay { background: #10b981; }
+.big-start-btn.pay:hover { background: #059669; }
 @media (max-width: 720px) {
   .modes { grid-template-columns: 1fr; }
 }

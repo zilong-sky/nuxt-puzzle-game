@@ -1,12 +1,13 @@
-<!-- app/pages/play/casual.vue - 休闲模式：弹窗选难度，30 张固定图 -->
+<!-- app/pages/play/casual.vue - 休闲模式：区间难度，每张图随机取值 -->
 <template>
-  <DifficultyModal
-    :open="!pieceCountChosen"
-    :min="4" :max="50" :initial="25"
-    @confirm="onDifficultyConfirm"
-    @cancel="onDifficultyCancel"
+  <DifficultyRangeModal
+    :open="!rangeChosen"
+    :min="4" :max="80"
+    :initial-min="20" :initial-max="60"
+    @confirm="onRangeConfirm"
+    @cancel="onRangeCancel"
   />
-  <div v-if="current && pieceCountChosen">
+  <div v-if="current && rangeChosen">
     <PuzzleGame
       :key="current.url"
       :image-url="current.url"
@@ -20,21 +21,30 @@
       @next="loadNext"
     />
   </div>
-  <div v-else-if="pieceCountChosen" class="card">加载中...</div>
+  <div v-else-if="rangeChosen" class="card">加载中...</div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import PuzzleGame from '~/components/PuzzleGame.vue'
-import DifficultyModal from '~/components/DifficultyModal.vue'
+import DifficultyRangeModal from '~/components/DifficultyRangeModal.vue'
 import { fetchCasualImages, type PuzzleImage } from '~/services/imageService'
+import { randInt } from '~/utils/random'
 
 const list = ref<PuzzleImage[]>([])
 const idx = ref(0)
 const pieceCount = ref(48)
-const pieceCountChosen = ref(false)
+const rangeChosen = ref(false)
+const rangeMin = ref(20)
+const rangeMax = ref(60)
 
 const current = computed(() => list.value[idx.value])
+
+function pickPieceCount() {
+  const lo = Math.max(4, Math.min(rangeMin.value, rangeMax.value))
+  const hi = Math.max(rangeMin.value, rangeMax.value)
+  pieceCount.value = lo === hi ? lo : randInt(lo, hi)
+}
 
 onMounted(async () => {
   if (typeof window !== 'undefined') window.scrollTo(0, 0)
@@ -47,13 +57,16 @@ onMounted(async () => {
   list.value = arr
 })
 
-function onDifficultyConfirm(v: number) {
-  pieceCount.value = v
-  pieceCountChosen.value = true
+function onRangeConfirm(v: { min: number; max: number }) {
+  rangeMin.value = v.min
+  rangeMax.value = v.max
+  pickPieceCount()
+  rangeChosen.value = true
 }
-function onDifficultyCancel() { navigateTo('/') }
+function onRangeCancel() { navigateTo('/') }
 function loadNext() {
   idx.value = (idx.value + 1) % list.value.length
+  pickPieceCount()
 }
 function onSuccess() {}
 function onFail() {}

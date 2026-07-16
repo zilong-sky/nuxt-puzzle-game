@@ -23,6 +23,7 @@ interface State {
   rankHistory: number[]
   adventureIdx: number
   playerName: string
+  paidPlaysUsed: number
   initialized: boolean
 }
 
@@ -36,11 +37,20 @@ export const useGameStore = defineStore('game', {
     rankHistory: [],
     adventureIdx: 0,
     playerName: '',
+    paidPlaysUsed: 0,
     initialized: false
   }),
   getters: {
     dailyFree: () => DAILY_FREE,
-    canPlayCloud: (s) => s.premium || s.dailyPlaysLeft > 0
+    canPlayCloud: (s) => s.premium || s.dailyPlaysLeft > 0,
+    // 付费价格序列：1, 2, 4, 6, 8, 10, 12 ...
+    // idx=0 → 1；idx=1 → 2；idx>=2 → 2 * idx
+    nextPaidPrice: (s) => {
+      const i = s.paidPlaysUsed
+      if (i <= 0) return 1
+      if (i === 1) return 2
+      return 2 * i
+    }
   },
   actions: {
     hydrate() {
@@ -61,7 +71,13 @@ export const useGameStore = defineStore('game', {
       this.items = getItem<Items>(STORAGE_KEYS.ITEMS, { restore: 1, freeze: 1 })
       this.adventureIdx = getItem<number>(STORAGE_KEYS.ADV_IDX, 0)
       this.playerName = getItem<string>(STORAGE_KEYS.PLAYER_NAME, '')
+      this.paidPlaysUsed = getItem<number>(STORAGE_KEYS.PAID_PLAYS_USED, 0)
       this.initialized = true
+    },
+    /** 模拟付费一局：无论是否有免费次数都消耗一次付费，返回价格 */
+    consumePaidPlay() {
+      this.paidPlaysUsed += 1
+      setItem(STORAGE_KEYS.PAID_PLAYS_USED, this.paidPlaysUsed)
     },
     consumeCloudPlay() {
       if (this.premium) return
