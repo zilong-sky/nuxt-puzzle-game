@@ -15,7 +15,7 @@
     <PuzzleGame
       :image-url="current.url"
       :piece-count="pieceCount"
-      :mode-label="`?? ??? ? ? ${idx + 1} ?`"
+      :mode-label="`☁️ 云冒险 · 第 ${idx + 1} 张`"
       :show-score="true"
       next-label="下一张"
       @success="onSuccess"
