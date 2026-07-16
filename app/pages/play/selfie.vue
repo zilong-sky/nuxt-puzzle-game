@@ -74,20 +74,45 @@
       <p>你成功拼完了这张自拍！</p>
       <p>是否将这张图片推荐到云图库？通过审核后其他玩家将能在云冒险中玩到它。</p>
       <template #footer>
-        <button class="ghost-btn" @click="onAbort">返回</button>
-        <button class="ghost-btn" @click="skipUpload">{{ hasNext ? '暂不上传，下一张' : '暂不上传' }}</button>
-        <button @click="doUpload">☁️ 上传</button>
+        <div class="stack-btns">
+          <button class="primary-btn" @click="doUpload">☁️ 上传到云图库</button>
+          <button class="ghost-btn" @click="skipUpload">{{ hasNext ? '暂不上传，下一张' : '暂不上传' }}</button>
+          <button class="ghost-btn" @click="onAbort">返回主页</button>
+        </div>
       </template>
     </ModalDialog>
 
-    <!-- 假上传进度弹窗 -->
-    <ModalDialog :visible="uploading" title="☁️ 上传中" :closable="false">
+    <!-- 上传中弹窗 -->
+    <ModalDialog :visible="uploadState === 'uploading' || uploadState === 'compressing'" :title="uploadState === 'compressing' ? '🗜 处理图片中' : '☁️ 上传中'" :closable="false">
       <div class="upload-progress">
         <div class="progress-track">
           <div class="progress-fill" :style="{ width: uploadProgress + '%' }"></div>
         </div>
         <div class="progress-num">{{ uploadProgress }}%</div>
+        <p class="hint" v-if="uploadState === 'compressing'">正在压缩图片...</p>
       </div>
+    </ModalDialog>
+
+    <!-- 上传失败弹窗 -->
+    <ModalDialog :visible="uploadState === 'failed'" title="❌ 上传失败" :closable="false">
+      <p><strong>失败原因：</strong></p>
+      <p class="err-msg">{{ uploadError }}</p>
+      <template #footer>
+        <div class="stack-btns">
+          <button class="primary-btn" @click="doUpload">🔄 重试</button>
+          <button class="ghost-btn" @click="giveUpUpload">不传了</button>
+        </div>
+      </template>
+    </ModalDialog>
+
+    <!-- 上传成功弹窗 -->
+    <ModalDialog :visible="uploadState === 'success'" title="✅ 上传成功" :closable="false">
+      <p>{{ uploadSuccessMsg }}</p>
+      <template #footer>
+        <div class="stack-btns">
+          <button class="primary-btn" @click="afterUploadDone">{{ hasNext ? '下一张' : '完成' }}</button>
+        </div>
+      </template>
     </ModalDialog>
   </div>
 </template>
@@ -120,8 +145,11 @@ const canvasEl = ref<HTMLCanvasElement | null>(null)
 let stream: MediaStream | null = null
 
 const askUpload = ref(false)
-const uploading = ref(false)
+type UploadState = 'idle' | 'compressing' | 'uploading' | 'failed' | 'success'
+const uploadState = ref<UploadState>('idle')
 const uploadProgress = ref(0)
+const uploadError = ref('')
+const uploadSuccessMsg = ref('')
 
 const imgDim = ref<{ w: number; h: number } | null>(null)
 const viewportTick = ref(0)
@@ -273,31 +301,59 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 }
 
 async function doUpload() {
+  // 防止重复点击
+  if (uploadState.value === 'compressing' || uploadState.value === 'uploading') return
   askUpload.value = false
-  uploading.value = true
+  uploadError.value = ''
+  uploadState.value = 'compressing'
   uploadProgress.value = 0
+
   try {
     const dataUrl = images.value[idx.value]
     if (!dataUrl) throw new Error('图片数据丢失')
+
+    // 让 UI 先渲染出"处理中"状态
+    await nextTick()
+
     const rawBlob = await dataUrlToBlob(dataUrl)
     const { blob: compressed, width, height } = await compressImage(rawBlob)
     const fingerprint = await getFingerprint()
     const uploader = game.playerName || 'anonymous'
+
+    uploadState.value = 'uploading'
+    uploadProgress.value = 0
+
     const result = await uploadImage(
       compressed,
       { uploader, fingerprint, width, height },
       (pct) => { uploadProgress.value = pct }
     )
-    uploading.value = false
+
     if (result.success) {
-      alert(result.message || '✅ 已提交，审核通过后会出现在云冒险')
+      uploadSuccessMsg.value = result.message || '已提交，审核通过后会出现在云冒险'
+      uploadState.value = 'success'
     } else {
-      alert('❌ ' + (result.error || '上传失败'))
+      uploadError.value = result.error || '未知错误（服务端未返回错误信息）'
+      console.error('[selfie upload] failed:', result)
+      uploadState.value = 'failed'
     }
   } catch (e) {
-    uploading.value = false
-    alert('? ?????' + (e as Error).message)
+    const err = e as Error
+    uploadError.value = err?.message || String(e) || '未知异常'
+    console.error('[selfie upload] exception:', err)
+    uploadState.value = 'failed'
   }
+}
+
+function giveUpUpload() {
+  uploadState.value = 'idle'
+  uploadError.value = ''
+  onNext()
+}
+
+function afterUploadDone() {
+  uploadState.value = 'idle'
+  uploadSuccessMsg.value = ''
   onNext()
 }
 
@@ -367,5 +423,11 @@ onBeforeUnmount(() => {
 .upload-progress { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; }
 .upload-progress .progress-track { width: 220px; height: 8px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
 .upload-progress .progress-fill { height: 100%; background: #d4af37; transition: width 0.12s linear; }
+.upload-progress .hint { font-size: 12px; color: var(--color-text-soft); margin: 4px 0 0; }
+.stack-btns { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.stack-btns button { width: 100%; padding: 10px 14px; border-radius: var(--radius-md); font-size: 15px; cursor: pointer; }
+.primary-btn { background: var(--color-primary, #4a7cff); color: #fff; border: none; }
+.primary-btn:hover { opacity: 0.9; }
+.err-msg { color: #e34a4a; background: #fef2f2; padding: 8px 10px; border-radius: 6px; font-size: 13px; word-break: break-word; margin: 6px 0; }
 .upload-progress .progress-num { font-size: 13px; color: var(--color-text-soft); }
 </style>
