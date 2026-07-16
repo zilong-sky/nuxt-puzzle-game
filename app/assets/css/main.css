@@ -35,7 +35,11 @@ button {
   border-radius: var(--radius-md);
   font-size: 14px;
   transition: background 0.2s;
+  /* 触摸设备高亮 + 避免子元素抢事件导致"点空白没反应" */
+  -webkit-tap-highlight-color: rgba(0,0,0,0.05);
+  touch-action: manipulation;
 }
+button > * { pointer-events: none; }
 button:hover { background: var(--color-primary-dark); }
 button:disabled { background: #ccc; cursor: not-allowed; }
 
