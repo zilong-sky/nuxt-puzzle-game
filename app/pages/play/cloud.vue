@@ -17,7 +17,7 @@
       :piece-count="pieceCount"
       :mode-label="`?? ??? ? ? ${idx + 1} ?`"
       :show-score="true"
-      next-label="???"
+      next-label="下一张"
       @success="onSuccess"
       @fail="onFail"
       @abort="onAbort"
