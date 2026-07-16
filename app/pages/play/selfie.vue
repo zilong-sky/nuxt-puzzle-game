@@ -83,6 +83,18 @@
       </div>
     </Transition>
 
+    <!-- 上传前确认弹窗 -->
+    <ModalDialog :visible="confirmUpload" title="☁️ 上传确认" :closable="false">
+      <p>每天最多只能上传 <strong>3 张</strong> 图片到云图库。</p>
+      <p>确定要上传这张吗？</p>
+      <template #footer>
+        <div class="stack-btns">
+          <button class="primary-btn" @click="confirmDoUpload">确定上传</button>
+          <button class="ghost-btn" @click="confirmUpload = false">取消</button>
+        </div>
+      </template>
+    </ModalDialog>
+
     <!-- 上传中弹窗 -->
     <ModalDialog :visible="uploadState === 'uploading' || uploadState === 'compressing'" :title="uploadState === 'compressing' ? '🗜 处理图片中' : '☁️ 上传中'" :closable="false">
       <div class="upload-progress">
@@ -100,7 +112,7 @@
       <p class="err-msg">{{ uploadError }}</p>
       <template #footer>
         <div class="stack-btns">
-          <button class="primary-btn" @click="doUpload">🔄 重试</button>
+          <button class="primary-btn" @click="confirmDoUpload">🔄 重试</button>
           <button class="ghost-btn" @click="giveUpUpload">不传了</button>
         </div>
       </template>
@@ -158,6 +170,7 @@ const canvasEl = ref<HTMLCanvasElement | null>(null)
 let stream: MediaStream | null = null
 
 const askUpload = ref(false)
+const confirmUpload = ref(false)
 type UploadState = 'idle' | 'compressing' | 'uploading' | 'failed' | 'success'
 const uploadState = ref<UploadState>('idle')
 const uploadProgress = ref(0)
@@ -315,8 +328,13 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 }
 
 async function doUpload() {
-  // 防止重复点击
+  // 先弹确认框，用户点"确定"再真正上传
   if (uploadState.value === 'compressing' || uploadState.value === 'uploading') return
+  confirmUpload.value = true
+}
+
+async function confirmDoUpload() {
+  confirmUpload.value = false
   askUpload.value = false
   uploadError.value = ''
   uploadState.value = 'compressing'
