@@ -1,4 +1,4 @@
-﻿<!-- app/layouts/default.vue - 榛樿甯冨眬锛屽寘鍚ご/灏俱€傞椤佃姹傛樀绉般€?-->
+<!-- app/layouts/default.vue - 默认布局，包含页头/页尾。首屏请求昵称。 -->
 <template>
   <div class="layout">
     <AppHeader />

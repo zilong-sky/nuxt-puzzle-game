@@ -1,6 +1,7 @@
-﻿/**
+/**
  * app/services/rankService.ts
- * 鎺掕姒滄湇鍔★細璇诲彇/鎻愪氦鐪熷疄鎺掑悕鏁版嵁銆? */
+ * 排行榜服务：读取/提交真实排名数据。
+ */
 
 export interface RankItem {
   rank: number

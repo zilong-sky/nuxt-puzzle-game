@@ -1,5 +1,6 @@
-﻿/**
- * app/utils/storage.ts - localStorage 绠€鏄撳皝瑁咃紙SSR 瀹夊叏锛? */
+/**
+ * app/utils/storage.ts - localStorage 简易封装（SSR 安全）
+ */
 
 const isClient = typeof window !== 'undefined'
 

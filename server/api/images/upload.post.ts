@@ -1,4 +1,4 @@
-﻿import { put } from '@vercel/blob'
+import { put } from '@vercel/blob'
 import { sql } from '@vercel/postgres'
 import { customAlphabet } from 'nanoid'
 
@@ -36,14 +36,14 @@ export default defineEventHandler(async (event) => {
   }
 
   if (!file || !file.data?.length) {
-    return { success: false, error: '缂哄皯鏂囦欢' }
+    return { success: false, error: '缺少文件' }
   }
   if (!fingerprint) {
-    return { success: false, error: '缂哄皯鎸囩汗鏍囪瘑' }
+    return { success: false, error: '缺少指纹标识' }
   }
   if (file.data.length > MAX_BYTES) {
     setResponseStatus(event, 413)
-    return { success: false, error: '鏂囦欢澶т簬 3MB' }
+    return { success: false, error: '文件大于 3MB' }
   }
 
   const day = todayCST()
@@ -51,7 +51,7 @@ export default defineEventHandler(async (event) => {
   const used = q.rows[0]?.count ?? 0
   if (used >= 3) {
     setResponseStatus(event, 429)
-    return { success: false, error: '浠婃棩棰濆害宸茬敤瀹岋紙3/3锛夛紝鏄庡ぉ鍐嶆潵' }
+    return { success: false, error: '今日额度已用完（3/3），明天再来' }
   }
 
   const key = `selfie/${Date.now()}-${nanoid()}.jpg`
@@ -74,5 +74,5 @@ export default defineEventHandler(async (event) => {
     ON CONFLICT (fingerprint, day) DO UPDATE SET count = upload_quota.count + 1
   `
 
-  return { success: true, id, message: '宸叉彁浜わ紝瀹℃牳閫氳繃鍚庝細鍑虹幇鍦ㄤ簯鍐掗櫓' }
+  return { success: true, id, message: '已提交，审核通过后会出现在云冒险' }
 })

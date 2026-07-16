@@ -1,6 +1,7 @@
-﻿/**
+/**
  * app/services/imageService.ts
- * 鍥剧墖鐩稿叧鎺ュ彛锛?浼戦棽妯″紡浣跨敤 picsum seeds 30 寮狅紝浜戝啋闄╂ā寮忚皟鐢?/api/images/cloud 鐪熷疄鏁版嵁銆? */
+ * 图片相关接口：休闲模式使用 picsum seeds 30 张，云冒险模式调用 /api/images/cloud 真实数据。
+ */
 
 export interface PuzzleImage {
   id: number
@@ -11,7 +12,7 @@ export interface PuzzleImage {
   uploadedAt?: number
 }
 
-/** 浼戦棽妯″紡锛歱icsum seeds 30 寮狅紙淇濇寔涓嶅彉锛?*/
+/** 休闲模式：picsum seeds 30 张（保持不变） */
 export async function fetchCasualImages(): Promise<PuzzleImage[]> {
   const seeds = [
     'aurora','forest','ocean','desert','mountain','sunset','city','river','lake','field',
@@ -25,12 +26,12 @@ export async function fetchCasualImages(): Promise<PuzzleImage[]> {
   }))
 }
 
-/** 浜戝啋闄╂ā寮忓浘搴擄細璇诲彇宸插鏍稿浘鐗囷紝鎸?seq ASC 椤哄簭銆?*/
+/** 云冒险模式图库：读取已审核图片，按 seq ASC 顺序。 */
 export async function fetchCloudImages(): Promise<PuzzleImage[]> {
   return await $fetch<PuzzleImage[]>('/api/images/cloud')
 }
 
-/** 鐢?XHR 涓婁紶浠ヨ幏鍙栫湡瀹炶繘搴︺€?*/
+/** 用 XHR 上传以获取真实进度。 */
 export function uploadImage(
   file: Blob,
   meta: { uploader: string; fingerprint: string; width: number; height: number },
@@ -59,10 +60,10 @@ export function uploadImage(
           resolve({ success: false, error: data.error || `HTTP ${xhr.status}` })
         }
       } catch {
-        resolve({ success: false, error: '鍝嶅簲瑙ｆ瀽澶辫触' })
+        resolve({ success: false, error: '响应解析失败' })
       }
     }
-    xhr.onerror = () => resolve({ success: false, error: '缃戠粶閿欒' })
+    xhr.onerror = () => resolve({ success: false, error: '网络错误' })
     xhr.send(fd)
   })
 }

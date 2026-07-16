@@ -1,6 +1,7 @@
-﻿/**
+/**
  * app/stores/gameStore.ts
- * 鍏ㄥ眬娓告垙鐘舵€侊細閬撳叿鏁伴噺銆佷簯鍐掗櫓姣忔棩娆℃暟銆佹渶楂樺垎銆佹瘡灞€鍘嗗彶銆佸啋闄╂ā寮忚繘搴︺€佺帺瀹舵樀绉般€? */
+ * 全局游戏状态：道具数量、云冒险每日次数、最高分、每局历史、冒险模式进度、玩家昵称。
+ */
 
 import { defineStore } from 'pinia'
 import { getItem, setItem, STORAGE_KEYS } from '~/utils/storage'
@@ -94,7 +95,7 @@ export const useGameStore = defineStore('game', {
       this.playerName = trimmed
       setItem(STORAGE_KEYS.PLAYER_NAME, trimmed)
     },
-    /** @deprecated 閬撳叿宸叉敼涓烘寜寮犺嚜鍔ㄨˉ婊★紝淇濈暀鎺ュ彛渚涙湭鏉ヤ粯璐硅喘涔版椂浣跨敤 */
+    /** @deprecated 道具已改为按张自动补满，保留接口供未来付费购买时使用 */
     useItem(kind: keyof Items) {
       if (this.items[kind] > 0) {
         this.items[kind] -= 1
