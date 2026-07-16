@@ -1,235 +1,242 @@
-# 拼图游戏第二批需求（9 条一次做完）
+# 自拍上传真实化 + 云冒险图库 + 排行榜接入
 
-## 1. 道具改成"每张一次"，而非"整局一次"
+## 一、目标
 
-**当前**：`useGameStore.items = { restore: 1, freeze: 1 }` 是玩家账户的库存，用一次 -1，永久扣。
-**期望**：进入**每一张**拼图（`usePuzzleGame.init()` 触发时）都重置为 `{ restore: 1, freeze: 1, replay: 1 }`；本局用完就是没了，下一张自动补满。全局 store 不再管道具库存。
+用 Vercel Blob 存图片，Vercel Postgres 存元数据 + 排行榜，实现：
+1. 自拍模式真实上传（含压缩、真实进度、指纹限流、审核制）
+2. 云冒险按已审核图片 seq 顺序玩
+3. 排行榜真实读写
+4. 玩家昵称首次输入
 
-改法：
-- `usePuzzleGame.ts` 内部新增 `roundItems = ref({ restore: 1, freeze: 1, replay: 1 })`，`init()` 里重置。
-- 导出 `roundItems, useRestore, useFreeze, useReplay`；`useRestore/useFreeze/useReplay` 内部先 `if (roundItems.value.xxx <= 0) return; roundItems.value.xxx -= 1;` 再执行原逻辑。
-- `PuzzleGame.vue` 的道具按钮改成读 `roundItems` 而不是 `game.items`；`doRestore/doFreeze` 里去掉 `game.useItem(...)` 那一步，直接调 `useRestore/useFreeze`。
-- `gameStore.ts` 保留 items 字段不动（未来做付费购买再用），但**不再消耗**，暂时视作背景库存/皮肤入口，UI 里也不显示了。
+## 二、前置
 
-## 2. 休闲模式：结束弹窗 → 点确认 → 弹窗消失 → 加载下一张（含进度条）
-
-**当前**：`PuzzleGame` 的成功弹窗点"下一张"emit `next` → `casual.vue` `idx.value++` → watch `imageUrl` 变 → `init()` 重置并 `loading=true` 进度条。理论已经是这个行为，**请验证**：
-- 点"下一张"后成功弹窗应立刻消失（`finished` 在 `init()` 里置 false）。
-- 弹窗消失后 loading overlay 立刻显示，进度条 0→100%。
-- 加载完成后新棋盘出现，继续玩。
-
-如果验证下来点"下一张"时**弹窗还没消失就开始加载**、或者**加载完了弹窗才关**，修 `usePuzzleGame.init()` 开头：
-```ts
-finished.value = false
-failed.value = false
-loading.value = true
-loadProgress.value = 0
+Vercel Blob 和 Postgres 已在项目中开通并关联，环境变量已注入。安装依赖：
 ```
-确保 `finished=false` 先于任何异步 fetch 发生（放在函数第一行，同步执行完 Vue 才切响应式）。
-
-## 3. 冒险模式：暂用休闲图池，顺序固定 + 全局进度持久化
-
-改 `app/pages/play/cloud.vue`：
-- `fetchCloudImages()` → 改成 `fetchCasualImages()`（用休闲同一批 30 张 seed 图）。
-- **不 shuffle**，保持 imageService 返回的原顺序（seed 数组顺序即为冒险模式顺序）。
-- 起始 idx 来自 `gameStore.adventureIdx`（新增字段）：
-  - `useGameStore` state 新增 `adventureIdx: 0`，storage key `puzzle:adv-idx`。
-  - `hydrate()` 里 `this.adventureIdx = getItem(STORAGE_KEYS.ADV_IDX, 0)`。
-  - actions 新增 `setAdventureIdx(i: number) { this.adventureIdx = i; setItem(STORAGE_KEYS.ADV_IDX, i) }`。
-- `onMounted`：`list.value = await fetchCasualImages()`（不打乱）；`idx.value = Math.min(game.adventureIdx, list.value.length - 1)`。
-- `loadNext()` 里：`idx.value = (idx.value + 1) % list.value.length`；调用 `game.setAdventureIdx(idx.value)`（持久化）。
-- 每张的 `pieceCount`：`randInt(30, 80)`（保留随机难度）。
-- `STORAGE_KEYS` 里加 `ADV_IDX: 'puzzle:adv-idx'`。
-
-## 4. 修复休闲模式页面标题/文案乱码
-
-`app/pages/play/casual.vue` 里的中文全是乱码（`?? ����ģʽ` / `������...` / `��һ��`）。**整个文件用 UTF-8 编码重写**为：
-
-```vue
-<!-- app/pages/play/casual.vue - 休闲模式：弹窗选难度，30 张固定图 -->
-<template>
-  <DifficultyModal
-    :open="!pieceCountChosen"
-    :min="4" :max="50" :initial="25"
-    @confirm="onDifficultyConfirm"
-    @cancel="onDifficultyCancel"
-  />
-  <div v-if="current && pieceCountChosen">
-    <PuzzleGame
-      :image-url="current.url"
-      :piece-count="pieceCount"
-      mode-label="🌿 休闲模式"
-      :show-score="false"
-      next-label="下一张"
-      @success="onSuccess"
-      @fail="onFail"
-      @abort="onAbort"
-      @next="loadNext"
-    />
-  </div>
-  <div v-else-if="pieceCountChosen" class="card">加载中...</div>
-</template>
+npm i @vercel/blob @vercel/postgres @fingerprintjs/fingerprintjs
 ```
 
-script/style 部分保持原有逻辑，只改中文文案。**用 UTF-8 without BOM 保存**。
+## 三、数据库表结构（写入项目 SETUP.md，让用户在 Vercel Query 面板执行）
 
-顺便检查其他文件里 mode-label / 提示语是否有 `??` `����` 之类的乱码，一并改成正确中文。
+```sql
+CREATE TABLE IF NOT EXISTS cloud_images (
+  id SERIAL PRIMARY KEY,
+  seq INT UNIQUE,                                  -- 审核通过后分配，从 1 递增
+  code TEXT UNIQUE,                                -- 'CLOUD-0001' 形式，seq 通过后生成
+  url TEXT NOT NULL,                               -- Blob 公开 URL
+  blob_pathname TEXT NOT NULL,                     -- Blob 内部路径（删除用）
+  uploader TEXT DEFAULT 'anonymous',
+  fingerprint TEXT NOT NULL,                       -- 浏览器指纹
+  uploaded_at BIGINT NOT NULL,                     -- ms
+  reviewed_at BIGINT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','approved','rejected')),
+  reject_reason TEXT,
+  width INT,
+  height INT
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_status ON cloud_images (status);
+CREATE INDEX IF NOT EXISTS idx_cloud_seq ON cloud_images (seq) WHERE status='approved';
 
-## 5. 自拍模式：结束弹窗 → 询问是否上传 → 假上传进度条 → 下一张（或返回选择页）
+CREATE TABLE IF NOT EXISTS upload_quota (
+  fingerprint TEXT NOT NULL,
+  day TEXT NOT NULL,                               -- 'YYYY-MM-DD' UTC+8
+  count INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (fingerprint, day)
+);
 
-`app/pages/play/selfie.vue` 已有 `askUpload` 弹窗（"是否将这张自拍推荐到云图库？"）。当前 `doUpload` 只是 `await uploadImage(blob)` mock 400ms。改成：
+CREATE TABLE IF NOT EXISTS scores (
+  id SERIAL PRIMARY KEY,
+  player_name TEXT NOT NULL,
+  fingerprint TEXT,
+  score INT NOT NULL,
+  level_reached INT DEFAULT 0,
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scores_desc ON scores (score DESC, created_at DESC);
+```
 
-- 新增状态 `uploading = ref(false)`、`uploadProgress = ref(0)`。
-- 新增弹窗 `<ModalDialog :visible="uploading" title="☁️ 上传中" :closable="false">`：内容是一个进度条（复用 `.progress-track/.progress-fill/.progress-num` 样式），显示 `{{ uploadProgress }}%`。
-- `doUpload()` 改成：
-  ```ts
-  async function doUpload() {
-    askUpload.value = false
-    uploading.value = true
-    uploadProgress.value = 0
-    // 假上传：3 秒内匀速 0→100
-    await new Promise<void>((resolve) => {
-      const start = Date.now()
-      const timer = setInterval(() => {
-        const elapsed = Date.now() - start
-        const pct = Math.min(100, Math.round((elapsed / 3000) * 100))
-        uploadProgress.value = pct
-        if (pct >= 100) { clearInterval(timer); resolve() }
-      }, 60)
-    })
-    // TODO: 真实上传接口就绪后替换成 uploadImage(blob)
+## 四、Server API（新增）
+
+### server/api/images/upload.post.ts
+- 读 multipart：`file`(Blob), `uploader`(string), `fingerprint`(string), `width`(int), `height`(int)
+- 校验：file 存在 且 <= 3MB（前端已压缩），fingerprint 必填
+- 限流：查 `upload_quota WHERE fingerprint=$fp AND day=$today(UTC+8)`；若 >=3 返回 429 `{error:'今日额度已用完（3/3），明天再来'}`
+- 上传 Blob：key `selfie/${Date.now()}-${nanoid(6)}.jpg`，`access:'public'`，`contentType:'image/jpeg'`
+- 插入 cloud_images（status='pending'），同事务 upsert upload_quota +1
+- 返回 `{success:true, id, message:'已提交，审核通过后会出现在云冒险'}`
+
+### server/api/images/cloud.get.ts
+- 查 `SELECT id, seq, code, url, uploader, uploaded_at FROM cloud_images WHERE status='approved' ORDER BY seq ASC`
+- 返回 PuzzleImage[]，`title=code`
+
+### server/api/rank/submit.post.ts
+- body: `{player_name, fingerprint, score, level_reached}`
+- 校验 score 是数字，插入 scores 表
+
+### server/api/rank/list.get.ts
+- 查前 50 名 `SELECT * FROM scores ORDER BY score DESC, created_at DESC LIMIT 50`
+- 返回 RankItem[]，rank 用 index+1
+
+## 五、前端改动
+
+### app/services/imageService.ts（整体重写为真实接口）
+```typescript
+export interface PuzzleImage {
+  id: number
+  url: string
+  title?: string
+  code?: string           // 新增
+  uploader?: string
+  uploadedAt?: number
+}
+
+export async function fetchCasualImages(): Promise<PuzzleImage[]> {
+  // 保持不变：picsum seeds 30 张
+}
+
+export async function fetchCloudImages(): Promise<PuzzleImage[]> {
+  return await $fetch<PuzzleImage[]>('/api/images/cloud')
+}
+
+// 用 XHR 拿真实上传进度
+export function uploadImage(
+  file: Blob,
+  meta: { uploader: string; fingerprint: string; width: number; height: number },
+  onProgress?: (pct: number) => void
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData()
+    fd.append('file', file, 'selfie.jpg')
+    fd.append('uploader', meta.uploader)
+    fd.append('fingerprint', meta.fingerprint)
+    fd.append('width', String(meta.width))
+    fd.append('height', String(meta.height))
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/images/upload')
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100))
+      }
+    }
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText)
+        if (xhr.status === 200) resolve(data)
+        else resolve({ success: false, error: data.error || `HTTP ${xhr.status}` })
+      } catch { resolve({ success: false, error: '响应解析失败' }) }
+    }
+    xhr.onerror = () => resolve({ success: false, error: '网络错误' })
+    xhr.send(fd)
+  })
+}
+```
+
+### app/services/rankService.ts（接真实 API）
+```typescript
+export async function fetchCloudRank(): Promise<RankItem[]> {
+  return await $fetch<RankItem[]>('/api/rank/list')
+}
+export async function submitScore(payload: {
+  player_name: string; fingerprint: string; score: number; level_reached?: number
+}) {
+  return await $fetch('/api/rank/submit', { method: 'POST', body: payload })
+}
+```
+
+### app/utils/imageCompress.ts（新增）
+```typescript
+export async function compressImage(blob: Blob, maxSide=1200, quality=0.85): Promise<{blob:Blob, width:number, height:number}> {
+  const img = await createImageBitmap(blob)
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height))
+  const w = Math.round(img.width * scale)
+  const h = Math.round(img.height * scale)
+  const canvas = document.createElement('canvas')
+  canvas.width = w; canvas.height = h
+  const ctx = canvas.getContext('2d')!
+  ctx.drawImage(img, 0, 0, w, h)
+  const out = await new Promise<Blob>((res) => canvas.toBlob(b => res(b!), 'image/jpeg', quality))
+  return { blob: out, width: w, height: h }
+}
+```
+
+### app/composables/useFingerprint.ts（新增）
+```typescript
+import FingerprintJS from '@fingerprintjs/fingerprintjs'
+let cached: string | null = null
+export async function getFingerprint(): Promise<string> {
+  if (cached) return cached
+  const fp = await FingerprintJS.load()
+  const res = await fp.get()
+  cached = res.visitorId
+  return cached
+}
+```
+
+### app/stores/gameStore.ts
+- 新增 `playerName: string` 状态，默认 `''`
+- STORAGE_KEYS 新增 `PLAYER_NAME: 'puzzle:player-name'`
+- hydrate 读取；actions 新增 `setPlayerName(name)` 持久化
+- **保留** 现有 items/adventureIdx 等所有字段
+
+### app/components/PlayerNameModal.vue（新增）
+- 简易弹窗，输入昵称（2-12 字符），存 gameStore.playerName
+- 在 default layout 里 mounted 后检查：if (!playerName) 显示弹窗
+
+### app/pages/play/selfie.vue（改 doUpload）
+```typescript
+async function doUpload() {
+  askUpload.value = false
+  uploading.value = true
+  uploadProgress.value = 0
+
+  try {
+    // 拿原 blob（从 canvas.toBlob 或 currentBlob）
+    const rawBlob = currentBlob.value  // 已有
+    const { blob: compressed, width, height } = await compressImage(rawBlob)
+    const fingerprint = await getFingerprint()
+    const uploader = game.playerName || 'anonymous'
+
+    const result = await uploadImage(compressed,
+      { uploader, fingerprint, width, height },
+      (pct) => { uploadProgress.value = pct }
+    )
     uploading.value = false
-    onNext()
+    if (result.success) {
+      alert(result.message || '✅ 已提交，审核通过后会出现在云冒险')
+    } else {
+      alert('❌ ' + (result.error || '上传失败'))
+    }
+  } catch (e) {
+    uploading.value = false
+    alert('❌ 上传异常：' + (e as Error).message)
   }
-  ```
-- `onNext()` 保持不变：如果有下一张 → idx++，否则 gameStarted=false 返回选择页。
-
-## 6. 新增道具"🔄 重玩本局"
-
-- `usePuzzleGame.ts` 新增 `restart()`：不重新拉图/不重新旋转/不重新 pickGrid，只把当前 `pieces` 的 `slotIndex` **重新 Fisher-Yates 洗一次**（复用 shufflePieces 里避免"洗后不变"的重试逻辑）→ `recomputeGroups()` → `finished=false, failed=false, running=true, timeLeft=calcCountdown(pieces.length)`。
-- 导出 `useReplay = () => restart()`（受 roundItems.replay 约束，同 §1）。
-- `PuzzleGame.vue` 道具栏在 `❄️ 时间冻结` 后面新增一个按钮：
-  ```html
-  <button
-    class="item-btn"
-    :disabled="!running || roundItems.replay <= 0"
-    @click="doReplay"
-  >
-    🔄 重玩本局 × {{ roundItems.replay }}
-  </button>
-  ```
-- `doReplay() { useReplay() }`。
-
-## 7. 云冒险入口按钮变大 + 居中
-
-`app/pages/index.vue` 的 `.mode-card.highlight`（云冒险卡）里的 `<button>了解并开始</button>` 改成：
-
-```html
-<button class="big-start-btn">了解并开始</button>
-```
-
-样式：
-```css
-.big-start-btn {
-  display: block;
-  margin: 12px auto 0;
-  padding: 12px 32px;
-  font-size: 16px;
-  font-weight: 600;
-  min-width: 180px;
-  border-radius: 10px;
-  background: var(--color-primary);
-  color: #fff;
-  border: none;
+  onNext()
 }
 ```
+**保留**假进度条 UI，只是数字来自真实 XHR onprogress。
 
-顺便把云冒险说明弹窗（ModalDialog）里的"进入云冒险"按钮也用相同 `.big-start-btn` class 处理，`.big-start-btn:disabled` 灰色。
+### app/pages/play/cloud.vue（改用真实云图库）
+- import `fetchCloudImages`（不是 fetchCasual）
+- onMounted：`list.value = await fetchCloudImages()`
+- 若 `list.value.length === 0`：显示空态提示"云冒险图库暂无内容，快去📸自拍模式上传第一张吧"+ 按钮跳 `/play/selfie`
+- `idx.value = Math.min(game.adventureIdx, list.value.length - 1)`
+- 图片顺序天然按 seq ASC（服务端已排序），不 shuffle
+- **提交分数**：游戏结束时（成功或失败）调 `submitScore({player_name: game.playerName, fingerprint, score, level_reached: idx+1})`
 
-## 8. 进入游戏页自动滚到顶（避免被 sticky header 遮）
+### app/pages/rank.vue
+- 若目前是 mock，改用 `fetchCloudRank()`
 
-`app/components/PuzzleGame.vue` 的 `onMounted` 里新增：
-```ts
-onMounted(() => {
-  init()
-  if (typeof window !== 'undefined') {
-    window.scrollTo({ top: 0, behavior: 'auto' })
-    // 再用 rAF 补一次，确保 sticky header 布局稳定后再校准
-    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
-  }
-})
-```
-另外在 `app/layouts/default.vue` 里给 `.main-content.is-play` 加 `min-height: 100dvh` 防止内容不够高时 header 相对位置漂移。
+## 六、SETUP.md（新增到项目根）
 
-保险起见，`app/pages/play/casual.vue` `app/pages/play/cloud.vue` `app/pages/play/selfie.vue` 三个页面的 `onMounted` 里也加一次 `window.scrollTo(0, 0)`。
+写清楚：
+1. 环境变量列表（Vercel 自动注入的哪些必须存在）
+2. 数据库建表 SQL（原样贴上面 CREATE TABLE 三段）
+3. 本地开发：`vercel link && vercel env pull .env.local && npm run dev`
 
-## 9. 二级页面 header 显示返回按钮
+## 七、验收
 
-改 `app/components/AppHeader.vue`：
-
-```vue
-<template>
-  <header class="app-header">
-    <div class="inner">
-      <button v-if="!isHome" class="back-btn" @click="goBack" aria-label="返回">
-        ← 返回
-      </button>
-      <NuxtLink to="/" class="brand" v-else>🧩 拼图小游戏</NuxtLink>
-      <div class="title-center" v-if="!isHome">{{ pageTitle }}</div>
-      <nav class="nav" v-if="isHome">
-        <NuxtLink to="/">首页</NuxtLink>
-        <NuxtLink to="/rank">排行榜</NuxtLink>
-      </nav>
-      <div class="right-placeholder" v-else />
-    </div>
-  </header>
-</template>
-
-<script setup lang="ts">
-import { computed } from 'vue'
-const route = useRoute()
-const router = useRouter()
-const isHome = computed(() => route.path === '/')
-const TITLE_MAP: Record<string, string> = {
-  '/play/casual': '🌿 休闲模式',
-  '/play/cloud': '☁️ 云冒险',
-  '/play/selfie': '📸 自拍上传',
-  '/rank': '🏆 排行榜'
-}
-const pageTitle = computed(() => TITLE_MAP[route.path] || '')
-function goBack() {
-  if (window.history.length > 1) router.back()
-  else navigateTo('/')
-}
-</script>
-```
-
-样式补：
-```css
-.back-btn {
-  background: transparent;
-  border: 1px solid var(--color-border);
-  color: var(--color-text);
-  padding: 4px 10px;
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.back-btn:hover { background: #f3f4f6; }
-.title-center {
-  flex: 1;
-  text-align: center;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-text);
-}
-.right-placeholder { width: 68px; } /* 平衡返回按钮的宽度，让标题真正居中 */
-```
-
----
-
-## 验收
-
-- `npm run build` 通过；
-- git commit：`feat(round-items): per-round items; feat(replay): 🔄 replay item; feat(adventure): reuse casual pool with sticky idx; feat(selfie): fake upload progress; feat(home): bigger centered CTA; fix(casual): mojibake title; feat(scroll): auto-scroll to top on enter; feat(header): back button on subpages`
-- push origin master（失败重试一次）。
+1. `npm run build` 通过
+2. 类型无错
+3. 提交 message：`feat(upload): real blob upload with compress+fingerprint+quota; feat(cloud): seq-ordered gallery; feat(rank): real postgres backend; feat(player): nickname prompt`
+4. push origin master（失败重试一次）
+5. 全过程自主完成，遇疑难项做保守选择（如指纹库加载失败用随机 uuid 兜底）。

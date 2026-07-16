@@ -1,4 +1,4 @@
-<!-- app/pages/play/selfie.vue - 自拍上传模式：本地图/摄像头拍照 + 难度自选 + 多图顺序游玩 -->
+﻿<!-- app/pages/play/selfie.vue - 自拍上传模式：本地图/摄像头拍照 + 难度自选 + 多图顺序游玩 -->
 <template>
   <div>
     <div v-if="!gameStarted" class="card setup">
@@ -96,6 +96,12 @@ import ModalDialog from '~/components/ModalDialog.vue'
 import DifficultyDial from '~/components/DifficultyDial.vue'
 import { randInt } from '~/utils/random'
 import { computeMaxPieces } from '~/utils/difficultyLimit'
+import { compressImage } from '~/utils/imageCompress'
+import { getFingerprint } from '~/composables/useFingerprint'
+import { uploadImage } from '~/services/imageService'
+import { useGameStore } from '~/stores/gameStore'
+
+const game = useGameStore()
 
 const images = ref<string[]>([])
 const CACHE_KEY = 'puzzle-selfie-images-v1'
@@ -255,21 +261,37 @@ function skipUpload() {
   onNext()
 }
 
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const res = await fetch(dataUrl)
+  return await res.blob()
+}
+
 async function doUpload() {
   askUpload.value = false
   uploading.value = true
   uploadProgress.value = 0
-  await new Promise<void>((resolve) => {
-    const start = Date.now()
-    const timer = setInterval(() => {
-      const elapsed = Date.now() - start
-      const pct = Math.min(100, Math.round((elapsed / 3000) * 100))
-      uploadProgress.value = pct
-      if (pct >= 100) { clearInterval(timer); resolve() }
-    }, 60)
-  })
-  // TODO: 真实上传接口就绪后替换为 uploadImage(blob)
-  uploading.value = false
+  try {
+    const dataUrl = images.value[idx.value]
+    if (!dataUrl) throw new Error('???????')
+    const rawBlob = await dataUrlToBlob(dataUrl)
+    const { blob: compressed, width, height } = await compressImage(rawBlob)
+    const fingerprint = await getFingerprint()
+    const uploader = game.playerName || 'anonymous'
+    const result = await uploadImage(
+      compressed,
+      { uploader, fingerprint, width, height },
+      (pct) => { uploadProgress.value = pct }
+    )
+    uploading.value = false
+    if (result.success) {
+      alert(result.message || '? ????????????????')
+    } else {
+      alert('? ' + (result.error || '????'))
+    }
+  } catch (e) {
+    uploading.value = false
+    alert('? ?????' + (e as Error).message)
+  }
   onNext()
 }
 

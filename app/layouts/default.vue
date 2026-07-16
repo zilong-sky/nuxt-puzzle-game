@@ -1,4 +1,4 @@
-<!-- app/layouts/default.vue - 默认布局，包含头/尾。手机优先，单屏无滚动。 -->
+﻿<!-- app/layouts/default.vue - 榛樿甯冨眬锛屽寘鍚ご/灏俱€傞椤佃姹傛樀绉般€?-->
 <template>
   <div class="layout">
     <AppHeader />
@@ -6,13 +6,25 @@
       <slot />
     </main>
     <AppFooter />
+    <PlayerNameModal :visible="askName" @done="askName = false" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import PlayerNameModal from '~/components/PlayerNameModal.vue'
+import { useGameStore } from '~/stores/gameStore'
+
 const route = useRoute()
 const isPlay = computed(() => route.path.startsWith('/play'))
+
+const game = useGameStore()
+const askName = ref(false)
+
+onMounted(() => {
+  game.hydrate()
+  if (!game.playerName) askName.value = true
+})
 </script>
 
 <style scoped>

@@ -1,6 +1,5 @@
-/**
- * app/utils/storage.ts - localStorage 简易封装（SSR 安全）
- */
+﻿/**
+ * app/utils/storage.ts - localStorage 绠€鏄撳皝瑁咃紙SSR 瀹夊叏锛? */
 
 const isClient = typeof window !== 'undefined'
 
@@ -36,5 +35,6 @@ export const STORAGE_KEYS = {
   RANK_HISTORY: 'puzzle_rank_history',
   ITEMS: 'puzzle_items',
   PREMIUM: 'puzzle_premium',
-  ADV_IDX: 'puzzle:adv-idx'
+  ADV_IDX: 'puzzle:adv-idx',
+  PLAYER_NAME: 'puzzle:player-name'
 } as const
