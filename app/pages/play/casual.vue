@@ -8,6 +8,7 @@
   />
   <div v-if="current && pieceCountChosen">
     <PuzzleGame
+      :key="current.url"
       :image-url="current.url"
       :piece-count="pieceCount"
       mode-label="🌿 休闲模式"

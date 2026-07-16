@@ -13,6 +13,7 @@
 
   <div v-else-if="current">
     <PuzzleGame
+      :key="current.url"
       :image-url="current.url"
       :piece-count="pieceCount"
       :mode-label="`☁️ 云冒险 · 第 ${idx + 1} 张`"

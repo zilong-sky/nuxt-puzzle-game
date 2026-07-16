@@ -23,7 +23,17 @@
     </div>
 
     <div class="board-holder">
+      <!-- 完成后展示完整原图供欣赏 -->
+      <div
+        v-if="finished"
+        class="finish-view"
+        :style="{ width: wrapSize.w + 'px', height: wrapSize.h + 'px' }"
+      >
+        <img :src="renderImageUrl" alt="完成图" class="finish-img" />
+        <div class="finish-badge">🎉 拼好了！</div>
+      </div>
       <PuzzleBoard
+        v-else
         :image-url="renderImageUrl"
         :pieces="pieces"
         :cols="cols"
@@ -45,31 +55,38 @@
     </div>
 
     <div class="items card" ref="itemsRef">
-      <button
-        class="item-btn"
-        :disabled="!running || roundItems.restore <= 0"
-        @click="doRestore"
-      >
-        🧠 智能还原 × {{ roundItems.restore }}
-      </button>
-      <button
-        class="item-btn"
-        :disabled="!running || roundItems.freeze <= 0 || frozen"
-        @click="doFreeze"
-      >
-        ❄️ 时间冻结 × {{ roundItems.freeze }}
-      </button>
-      <button
-        class="item-btn"
-        :disabled="!running || roundItems.replay <= 0"
-        @click="doReplay"
-      >
-        🔄 重玩本局 × {{ roundItems.replay }}
-      </button>
-      <button class="ghost-btn" @click="$emit('abort')">退出本局</button>
+      <template v-if="finished">
+        <button class="ghost-btn" @click="$emit('abort')">返回</button>
+        <button class="next-big" @click="$emit('next')">{{ nextLabel }} →</button>
+      </template>
+      <template v-else>
+        <button
+          class="item-btn"
+          :disabled="!running || roundItems.restore <= 0"
+          @click="doRestore"
+        >
+          🧠 智能还原 × {{ roundItems.restore }}
+        </button>
+        <button
+          class="item-btn"
+          :disabled="!running || roundItems.freeze <= 0 || frozen"
+          @click="doFreeze"
+        >
+          ❄️ 时间冻结 × {{ roundItems.freeze }}
+        </button>
+        <button
+          class="item-btn"
+          :disabled="!running || roundItems.replay <= 0"
+          @click="doReplay"
+        >
+          🔄 重玩本局 × {{ roundItems.replay }}
+        </button>
+        <button class="ghost-btn" @click="$emit('abort')">退出本局</button>
+      </template>
     </div>
 
-    <ModalDialog :visible="finished && !hideSuccessModal" title="🎉 拼图完成" :closable="false">
+    <!-- 完成弹窗：默认不再阻塞欣赏，仅在 hideSuccessModal=false 时短暂显示（保留兼容） -->
+    <ModalDialog :visible="false" title="🎉 拼图完成" :closable="false">
       <p>你成功拼完了这张图片！</p>
       <p v-if="showScore">本局得分：<strong>{{ placedCount }}</strong> 分</p>
       <template #footer>
@@ -299,6 +316,35 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: center;
   padding: 8px 12px;
+}
+.finish-view {
+  position: relative;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  background: #000;
+}
+.finish-img { width: 100%; height: 100%; object-fit: contain; display: block; animation: reveal 0.6s ease; }
+@keyframes reveal { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+.finish-badge {
+  position: absolute;
+  top: 12px; left: 50%; transform: translateX(-50%);
+  background: rgba(34, 197, 94, 0.95);
+  color: #fff;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  animation: pop 0.5s ease;
+}
+@keyframes pop { 0% { transform: translateX(-50%) scale(0.6); opacity: 0; } 60% { transform: translateX(-50%) scale(1.15); opacity: 1; } 100% { transform: translateX(-50%) scale(1); } }
+.next-big {
+  flex: 2 1 auto;
+  font-size: 16px;
+  font-weight: 600;
+  background: var(--color-primary);
+  color: #fff;
 }
 .item-btn { background: var(--color-warning); flex: 1 1 auto; min-width: 0; font-size: 13px; }
 .item-btn:hover { background: #d97706; }
