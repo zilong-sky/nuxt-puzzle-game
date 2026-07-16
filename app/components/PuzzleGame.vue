@@ -56,7 +56,7 @@
 
     <div class="items card" ref="itemsRef">
       <template v-if="finished && !hideFinishActions">
-        <button class="ghost-btn" @click="$emit('abort')">返回</button>
+        <button class="ghost-btn" @click="onAbortClick">返回</button>
         <button class="next-big" @click="$emit('next')">{{ nextLabel }} →</button>
       </template>
       <template v-else-if="!finished">
@@ -166,6 +166,15 @@ function onMoveGroupToSlot(pieceId: number, targetSlot: number) {
 function doRestore() { useRestore() }
 function doFreeze() { useFreeze() }
 function doReplay() { useReplay() }
+
+// 返回按钮：先释放大 dataURL / pieces，让 UI 立刻反馈，再 emit
+function onAbortClick() {
+  try {
+    renderImageUrl.value = ''
+    pieces.value = []
+  } catch { /* ignore */ }
+  requestAnimationFrame(() => emit('abort'))
+}
 function watchReviveAd() {
   adVisible.value = true
   playRewardAd()
