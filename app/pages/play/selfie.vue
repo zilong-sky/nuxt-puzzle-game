@@ -343,6 +343,7 @@ async function doUpload() {
       (pct) => { uploadProgress.value = pct }
     )
 
+    console.log('[selfie upload] result:', result)
     if (result.success) {
       uploadSuccessMsg.value = result.message || '已提交，审核通过后会出现在云冒险'
       uploadedId.value = result.id ?? null
@@ -350,6 +351,13 @@ async function doUpload() {
       // 显示 toast，5 秒后自动隐藏
       successToast.value = true
       setTimeout(() => { successToast.value = false }, 5000)
+      // 保底：原生 alert 兜底（防止 Vue 弹窗被 CSS/缓存问题吞掉）
+      // 用 setTimeout 让 Vue 先渲染 success 弹窗
+      setTimeout(() => {
+        if (uploadState.value === 'success') {
+          alert('✅ 上传成功！\n' + (result.message || '已提交云图库审核') + (result.id ? '\n编号 #' + result.id : ''))
+        }
+      }, 100)
     } else {
       uploadError.value = result.error || '未知错误（服务端未返回错误信息）'
       console.error('[selfie upload] failed:', result)
