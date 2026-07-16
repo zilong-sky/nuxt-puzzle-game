@@ -44,8 +44,8 @@
 
     <div v-else-if="current">
       <PuzzleGame
-        :key="current.url"
-        :image-url="current.url"
+        :key="current"
+        :image-url="current"
         :piece-count="pieceCount"
         mode-label="📷 自拍上传"
         :show-score="false"
